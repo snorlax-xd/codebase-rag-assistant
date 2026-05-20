@@ -4,10 +4,11 @@ from qdrant_client.models import PointStruct
 import uuid
 import os
 
+EMBEDDING_DIM = 768
 
 client = QdrantClient(
-    host="localhost",
-    port=6333
+    host=os.getenv("QDRANT_HOST", "localhost"),
+    port=int(os.getenv("QDRANT_PORT", 6333))
 )
 
 COLLECTION_NAME = "codebase_chunks"
@@ -85,7 +86,3 @@ def search_similar_chunks(query_embedding):
 
     return search_results.points
 
-client = QdrantClient(
-    host=os.getenv("QDRANT_HOST", "localhost"),
-    port=int(os.getenv("QDRANT_PORT", 6333))
-)
