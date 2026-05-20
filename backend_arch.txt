@@ -1,0 +1,501 @@
+1. app/api/repo_api.py
+from fastapi import APIRouter
+from app.services.repo_service import clone_repository
+from app.services.file_service import scan_repository
+from app.services.qdrant_service import create_collection
+from app.services.repo_service import index_repository
+from app.services.repo_service import search_repository
+from app.services.embedding_service import generate_embedding
+from app.services.qdrant_service import search_similar_chunks
+from app.services.llm_service import generate_response
+
+
+router = APIRouter()
+
+
+@router.post("/clone-repo")
+def clone_repo(repo_url: str):
+
+    result = clone_repository(repo_url)
+
+    return result
+
+@router.get("/scan-repo")
+def scan_repo(repo_name: str):
+
+    repo_path = f"repositories/{repo_name}"
+
+    scanned_files = scan_repository(repo_path)
+
+    return {
+        "repository": repo_name,
+        "total_files": len(scanned_files),
+        "files": scanned_files
+    }
+
+@router.post("/create-collection")
+def create_qdrant_collection():
+
+    return create_collection()
+
+@router.post("/index-repo")
+def index_repo(repo_name: str):
+
+    repo_path = f"repositories/{repo_name}"
+
+    return index_repository(repo_path)
+
+@router.get("/search")
+
+def search_code(query: str):
+
+    results = search_repository(query)
+
+    return {
+        "query": query,
+        "results": results
+    }
+
+
+@router.get("/ask")
+def ask_question(query: str):
+
+    query_embedding = generate_embedding(query)
+
+    search_results = search_similar_chunks(query_embedding)
+
+    context_chunks = []
+
+    formatted_results = []
+
+    for result in search_results:
+
+        payload = result.payload
+
+        content = payload.get("content", "")
+
+        context_chunks.append(content)
+
+        formatted_results.append({
+            "score": result.score,
+            "file_name": payload.get("file_name"),
+            "path": payload.get("path")
+        })
+
+    final_answer = generate_response(
+        query,
+        context_chunks
+    )
+
+    return {
+        "query": query,
+        "answer": final_answer,
+        "sources": formatted_results
+    }
+
+
+2. app/parsers/tree_sitter_parser.py
+from tree_sitter import Language, Parser
+import tree_sitter_python as tspython
+
+
+PYTHON_LANGUAGE = Language(tspython.language())
+
+parser = Parser(PYTHON_LANGUAGE)
+
+
+def parse_python_code(source_code: str):
+
+    tree = parser.parse(bytes(source_code, "utf8"))
+
+    root_node = tree.root_node
+
+    parsed_data = {
+        "functions": [],
+        "classes": []
+    }
+
+    extract_nodes(root_node, source_code, parsed_data)
+
+    return parsed_data
+
+
+def extract_nodes(node, source_code, parsed_data):
+
+    if node.type == "function_definition":
+
+        function_name = node.child_by_field_name("name")
+
+        function_code = source_code[
+            node.start_byte:node.end_byte
+        ]
+
+        parsed_data["functions"].append({
+            "type": "function",
+            "name": source_code[
+                function_name.start_byte:function_name.end_byte
+            ],
+            "content": function_code,
+            "start_line": node.start_point[0] + 1,
+            "end_line": node.end_point[0] + 1
+        })
+
+    elif node.type == "class_definition":
+
+        class_name = node.child_by_field_name("name")
+
+        class_code = source_code[
+            node.start_byte:node.end_byte
+        ]
+
+        parsed_data["classes"].append({
+            "type": "class",
+            "name": source_code[
+                class_name.start_byte:class_name.end_byte
+            ],
+            "content": class_code,
+            "start_line": node.start_point[0] + 1,
+            "end_line": node.end_point[0] + 1
+        })
+
+    for child in node.children:
+        extract_nodes(child, source_code, parsed_data)
+
+3. app/services/embedding_services.py
+import ollama
+
+
+def generate_embedding(text: str):
+
+    response = ollama.embeddings(
+        model="nomic-embed-text",
+        prompt=text
+    )
+
+    return response["embedding"]
+
+4. app/services/file_services.py
+import os
+from app.parsers.tree_sitter_parser import parse_python_code
+
+IGNORE_DIRECTORIES = {
+    ".git",
+    "node_modules",
+    "__pycache__",
+    "venv"
+}
+
+
+SUPPORTED_EXTENSIONS = {
+    ".py": "Python",
+    ".js": "JavaScript",
+    ".ts": "TypeScript",
+    ".java": "Java",
+    ".cpp": "C++",
+    ".c": "C",
+    ".go": "Go",
+    ".rs": "Rust"
+}
+
+
+def scan_repository(repo_path: str):
+
+    scanned_files = []
+
+    for root, dirs, files in os.walk(repo_path):
+
+        dirs[:] = [
+            d for d in dirs
+            if d not in IGNORE_DIRECTORIES
+        ]
+
+        for file in files:
+
+            file_extension = os.path.splitext(file)[1]
+
+            if file_extension in SUPPORTED_EXTENSIONS:
+
+                full_path = os.path.join(root, file)
+
+                file_data = {
+                    "file_name": file,
+                    "language": SUPPORTED_EXTENSIONS[file_extension],
+                    "path": full_path
+                }
+
+                if file_extension == ".py":
+
+                    try:
+
+                        with open(full_path, "r", encoding="utf-8") as source_file:
+                            source_code = source_file.read()
+
+                        parsed_output = parse_python_code(source_code)
+
+                        file_data["parsed"] = parsed_output
+
+                    except Exception as error:
+
+                        file_data["parsed"] = {
+                            "error": str(error)
+                        }
+
+                scanned_files.append(file_data)
+
+    return scanned_files
+
+5. app/services/llm_service.py
+import ollama
+
+
+def generate_response(query: str, context_chunks):
+
+    context_text = "\n\n".join(context_chunks)
+
+    prompt = f"""
+You are an expert code assistant.
+
+Answer the user's question using ONLY the provided code context.
+
+CODE CONTEXT:
+{context_text}
+
+QUESTION:
+{query}
+
+ANSWER:
+"""
+
+    response = ollama.chat(
+        model="llama3",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    )
+
+    return response["message"]["content"]
+
+
+6. app/services/qdrant_service.oy
+
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
+
+client = QdrantClient(
+    host="localhost",
+    port=6333
+)
+
+COLLECTION_NAME = "codebase_chunks"
+
+
+def create_collection():
+
+    collections = client.get_collections().collections
+
+    collection_names = [
+        collection.name
+        for collection in collections
+    ]
+
+    if COLLECTION_NAME not in collection_names:
+
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+
+            vectors_config=VectorParams(
+                size=768,
+                distance=Distance.COSINE
+            )
+        )
+
+        return {
+            "status": "created",
+            "collection": COLLECTION_NAME
+        }
+
+    return {
+        "status": "already_exists",
+        "collection": COLLECTION_NAME
+    }
+
+from qdrant_client.models import PointStruct
+import uuid
+
+def store_embedding(file_data, embedding):
+
+    client.upsert(
+        collection_name=COLLECTION_NAME,
+
+        points=[
+
+            PointStruct(
+                id=str(uuid.uuid4()),
+
+                vector=embedding,
+
+                payload={
+
+                    "file_name": file_data["file_name"],
+                    "language": file_data["language"],
+                    "path": file_data["path"],
+
+                    "content": file_data.get("content", ""),
+
+                    "parsed": file_data.get("parsed", {})
+                }
+            )
+        ]
+    )
+
+    return {
+        "status": "stored"
+    }
+
+
+def search_similar_chunks(query_embedding):
+
+    search_results = client.query_points(
+        collection_name=COLLECTION_NAME,
+        query=query_embedding,
+        limit=5
+    )
+
+    return search_results.points
+
+7. app/services/repo_service.py
+
+from git import Repo
+import os
+from app.services.file_service import scan_repository
+from app.services.embedding_service import generate_embedding
+from app.services.qdrant_service import store_embedding
+from app.services.qdrant_service import search_similar_chunks
+
+
+REPO_BASE_PATH = "repositories"
+
+
+def clone_repository(repo_url: str):
+
+    os.makedirs(REPO_BASE_PATH, exist_ok=True)
+
+    repo_name = repo_url.split("/")[-1].replace(".git", "")
+
+    local_path = os.path.join(REPO_BASE_PATH, repo_name)
+
+    if os.path.exists(local_path):
+        return {
+            "status": "already_exists",
+            "path": local_path
+        }
+
+    Repo.clone_from(repo_url, local_path)
+
+    return {
+        "status": "cloned",
+        "path": local_path
+    }
+
+
+def split_text(text, max_chars=2000):
+
+    chunks = []
+
+    for i in range(0, len(text), max_chars):
+        chunks.append(text[i:i + max_chars])
+
+    return chunks
+
+
+def index_repository(repo_path: str):
+
+    scanned_files = scan_repository(repo_path)
+
+    indexed_count = 0
+
+    for file_data in scanned_files:
+
+        parsed_data = file_data.get("parsed", {})
+
+        functions = parsed_data.get("functions", [])
+        classes = parsed_data.get("classes", [])
+
+        chunks = functions + classes
+
+        for chunk in chunks:
+
+            content = chunk.get("content", "")
+
+            if not content.strip():
+                continue
+
+            text_chunks = split_text(content)
+
+            for text_chunk in text_chunks:
+
+                embedding = generate_embedding(text_chunk)
+
+                payload_data = {
+
+                    "file_name": file_data["file_name"],
+                    "language": file_data["language"],
+                    "path": file_data["path"],
+
+                    "content": text_chunk,
+
+                    "parsed": chunk
+                }
+
+                store_embedding(payload_data, embedding)
+
+                indexed_count += 1
+
+    return {
+
+        "status": "indexed",
+        "indexed_chunks": indexed_count
+    }
+
+def search_repository(query: str):
+
+    query_embedding = generate_embedding(query)
+
+    results = search_similar_chunks(query_embedding)
+
+    formatted_results = []
+
+    for result in results:
+
+        formatted_results.append({
+
+            "score": result.score,
+
+            "file_name": result.payload.get("file_name"),
+
+            "language": result.payload.get("language"),
+
+            "path": result.payload.get("path"),
+
+            "content": result.payload.get("content")
+        })
+
+    return formatted_results
+
+8. app/main.py
+from fastapi import FastAPI
+from app.api.repo_api import router as repo_router
+
+app = FastAPI()
+
+app.include_router(repo_router)
+
+
+@app.get("/")
+def root():
+    return {"message": "Codebase RAG Backend Running"}
+
+9. 

@@ -1,0 +1,50 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+.next/
+
+# Logs
+*.log
+
+# Repositories
+repositories/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+build/
+
+# ZIP files
+*.zip
+
+# EXE/MSI
+*.exe
+*.msi
+
+# Docker
+docker-data/
+
+# VSCode
+.vscode/
+
+# Stitch / Antigravity
+.stitch-ref/
+stitch_to_antigravity_codebase_rag_ui/
+
+# Build logs
+build.log
+
+# Architecture notes
+arch.txt
+backend_arch.txt

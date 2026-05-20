@@ -1,0 +1,2445 @@
+1. components/layout/appshell
+"use client";
+
+import { motion, AnimatePresence } from "framer-motion";
+import { usePathname } from "next/navigation";
+
+import AmbientLayer from "@/components/ambient/AmbientLayer";
+import Sidebar from "@/components/layout/Sidebar";
+import Topbar from "@/components/layout/Topbar";
+import { easePremium } from "@/lib/motion/presets";
+
+type AppShellProps = {
+  children: React.ReactNode;
+  title?: string;
+  showBrand?: boolean;
+  showRepoPills?: boolean;
+  showContextButton?: boolean;
+  showRunAnalysis?: boolean;
+  topbarActions?: React.ReactNode;
+  fullBleed?: boolean;
+  hideSidebar?: boolean;
+};
+
+export default function AppShell({
+  children,
+  title,
+  showBrand,
+  showRepoPills,
+  showContextButton,
+  showRunAnalysis,
+  topbarActions,
+  fullBleed = false,
+  hideSidebar = false,
+}: AppShellProps) {
+  const pathname = usePathname();
+
+  return (
+    <div className="relative flex h-screen flex-col overflow-hidden bg-background">
+      <AmbientLayer />
+
+      <div className="relative z-10 flex h-full flex-col">
+        <Topbar
+          title={title}
+          showBrand={showBrand}
+          showRepoPills={showRepoPills}
+          showContextButton={showContextButton}
+          showRunAnalysis={showRunAnalysis}
+          actions={topbarActions}
+        />
+
+        <div className="flex min-h-0 flex-1">
+          {!hideSidebar && <Sidebar />}
+
+          <AnimatePresence mode="wait">
+            <motion.main
+              key={pathname}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.35, ease: easePremium }}
+              className={
+                fullBleed
+                  ? "relative flex min-w-0 flex-1 flex-col overflow-hidden"
+                  : "relative min-w-0 flex-1 overflow-y-auto"
+              }
+            >
+              {children}
+            </motion.main>
+          </AnimatePresence>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+2. components/layout/fileexplorer
+"use client";
+
+import { useState } from "react";
+import { motion } from "framer-motion";
+import {
+  ChevronDown,
+  ChevronRight,
+  FileCode2,
+  Folder,
+  MoreVertical,
+} from "lucide-react";
+
+import { cn } from "@/lib/utils/cn";
+
+type FileNode = {
+  name: string;
+  type: "folder" | "file";
+  children?: FileNode[];
+  active?: boolean;
+};
+
+const TREE: FileNode[] = [
+  {
+    name: "src",
+    type: "folder",
+    children: [
+      {
+        name: "components",
+        type: "folder",
+        children: [
+          { name: "SearchService.ts", type: "file", active: true },
+          { name: "FileTree.tsx", type: "file" },
+        ],
+      },
+      {
+        name: "lib",
+        type: "folder",
+        children: [
+          { name: "embeddings", type: "folder", children: [{ name: "Engine.ts", type: "file" }] },
+        ],
+      },
+    ],
+  },
+  { name: "package.json", type: "file" },
+  { name: "README.md", type: "file" },
+];
+
+type FileExplorerProps = {
+  onSelect?: (file: string) => void;
+  className?: string;
+};
+
+function TreeNode({
+  node,
+  depth = 0,
+  onSelect,
+}: {
+  node: FileNode;
+  depth?: number;
+  onSelect?: (file: string) => void;
+}) {
+  const [open, setOpen] = useState(depth < 2);
+
+  if (node.type === "file") {
+    return (
+      <button
+        type="button"
+        onClick={() => onSelect?.(node.name)}
+        className={cn(
+          "flex w-full items-center gap-2 rounded px-2 py-1.5 font-code-sm text-left transition",
+          node.active
+            ? "bg-surface-variant text-primary"
+            : "text-on-surface hover:bg-surface-variant"
+        )}
+        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+      >
+        <FileCode2 size={14} className={node.active ? "text-primary" : "text-on-surface-variant"} />
+        {node.name}
+      </button>
+    );
+  }
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 font-code-sm text-on-surface hover:bg-surface-variant"
+        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+      >
+        {open ? (
+          <ChevronDown size={14} className="text-primary" />
+        ) : (
+          <ChevronRight size={14} className="text-on-surface-variant" />
+        )}
+        <Folder size={14} className="text-secondary" />
+        {node.name}
+      </button>
+      {open &&
+        node.children?.map((child) => (
+          <TreeNode key={child.name} node={child} depth={depth + 1} onSelect={onSelect} />
+        ))}
+    </div>
+  );
+}
+
+export default function FileExplorer({ onSelect, className }: FileExplorerProps) {
+  return (
+    <section
+      className={cn(
+        "hidden w-72 shrink-0 flex-col border-r border-outline-variant bg-surface-container-lowest lg:flex",
+        className
+      )}
+    >
+      <div className="flex items-center justify-between border-b border-outline-variant p-4">
+        <h2 className="font-label-caps text-on-surface-variant">Explorer</h2>
+        <button type="button" className="text-on-surface-variant hover:text-primary">
+          <MoreVertical size={16} />
+        </button>
+      </div>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="flex-1 space-y-0.5 overflow-y-auto p-2"
+      >
+        {TREE.map((node) => (
+          <TreeNode key={node.name} node={node} onSelect={onSelect} />
+        ))}
+      </motion.div>
+    </section>
+  );
+}
+
+
+3. components/layout/sidebar
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { motion } from "framer-motion";
+import { UserCircle } from "lucide-react";
+
+import { APP_NAME, PRIMARY_NAV } from "@/lib/constants/navigation";
+import { easePremium } from "@/lib/motion/presets";
+import { cn } from "@/lib/utils/cn";
+
+export default function Sidebar() {
+  const pathname = usePathname();
+
+  return (
+    <aside className="relative hidden h-full w-[var(--sidebar-width)] shrink-0 flex-col border-r border-outline-variant/60 bg-surface-container-low/80 py-4 backdrop-blur-xl lg:flex">
+      <div className="pointer-events-none absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-primary/20 to-transparent" />
+
+      <motion.div
+        initial={{ opacity: 0, x: -8 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ duration: 0.45, ease: easePremium }}
+        className="mb-6 px-6"
+      >
+        <div className="flex items-center gap-3">
+          <motion.div
+            whileHover={{ scale: 1.04 }}
+            className="relative flex h-10 w-10 items-center justify-center rounded-lg bg-secondary-container shadow-[0_0_20px_rgba(78,222,163,0.25)]"
+          >
+            <UserCircle className="h-5 w-5 text-on-secondary-container" />
+            <span className="absolute inset-0 rounded-lg ring-1 ring-white/10" />
+          </motion.div>
+          <div>
+            <p className="font-display text-base font-bold tracking-tight text-on-surface">
+              Lead Developer
+            </p>
+            <p className="text-xs text-on-surface-variant">Pro Plan</p>
+          </div>
+        </div>
+      </motion.div>
+
+      <nav className="flex flex-1 flex-col gap-1 px-2">
+        {PRIMARY_NAV.map((item, i) => {
+          const isActive =
+            pathname === item.href ||
+            (item.href !== "/" && pathname.startsWith(item.href));
+
+          return (
+            <Link key={item.href} href={item.href}>
+              <motion.div
+                initial={{ opacity: 0, x: -12 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.04, ease: easePremium }}
+                whileHover={{ x: 3, transition: { duration: 0.2 } }}
+                whileTap={{ scale: 0.98 }}
+                className={cn(
+                  "relative flex cursor-pointer items-center gap-3 rounded-lg px-4 py-3 transition-all duration-300",
+                  isActive
+                    ? "nav-active-glow bg-secondary-container font-bold text-on-secondary-container"
+                    : "text-on-surface-variant hover:bg-surface-variant/60 hover:text-on-surface"
+                )}
+              >
+                {isActive && (
+                  <motion.span
+                    layoutId="nav-glow"
+                    className="absolute inset-0 rounded-lg bg-secondary/10"
+                    transition={{ type: "spring", stiffness: 380, damping: 28 }}
+                  />
+                )}
+                <item.icon
+                  size={20}
+                  className={cn(
+                    "relative z-10 shrink-0 transition-colors",
+                    isActive ? "text-on-secondary-container" : "group-hover:text-secondary"
+                  )}
+                />
+                <span className="relative z-10">{item.label}</span>
+              </motion.div>
+            </Link>
+          );
+        })}
+      </nav>
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.3 }}
+        className="mt-auto border-t border-outline-variant/50 px-4 py-4"
+      >
+        <p className="bg-gradient-to-r from-primary to-secondary bg-clip-text text-lg font-bold text-transparent">
+          {APP_NAME}
+        </p>
+        <div className="glass-card mt-4 rounded-xl p-4">
+          <p className="font-label-caps text-on-surface-variant">Token Usage</p>
+          <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-variant">
+            <motion.div
+              initial={{ width: 0 }}
+              animate={{ width: "65%" }}
+              transition={{ duration: 1, delay: 0.5, ease: easePremium }}
+              className="h-full bg-gradient-to-r from-secondary-container to-secondary shadow-[0_0_12px_rgba(78,222,163,0.5)]"
+            />
+          </div>
+          <div className="mt-2 flex justify-between font-code-sm text-xs text-on-surface-variant">
+            <span>650k / 1M</span>
+            <span className="font-metric text-secondary">65%</span>
+          </div>
+        </div>
+      </motion.div>
+    </aside>
+  );
+}
+
+
+4. components/layout/topbar
+"use client";
+
+import { motion } from "framer-motion";
+import {
+  Bell,
+  ChevronDown,
+  GitBranch,
+  Menu,
+  Settings,
+  Sparkles,
+  Terminal,
+  Zap,
+} from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { APP_NAME, DEFAULT_REPO } from "@/lib/constants/navigation";
+import { easePremium } from "@/lib/motion/presets";
+import { cn } from "@/lib/utils/cn";
+
+type TopbarProps = {
+  title?: string;
+  showBrand?: boolean;
+  showRepoPills?: boolean;
+  showContextButton?: boolean;
+  showRunAnalysis?: boolean;
+  onRunAnalysis?: () => void;
+  actions?: React.ReactNode;
+};
+
+export default function Topbar({
+  title,
+  showBrand = false,
+  showRepoPills = false,
+  showContextButton = false,
+  showRunAnalysis = false,
+  onRunAnalysis,
+  actions,
+}: TopbarProps) {
+  return (
+    <header className="topbar-glass sticky top-0 z-50 flex h-16 shrink-0 items-center justify-between px-[var(--container-padding)]">
+      <div className="flex items-center gap-4">
+        <motion.button
+          type="button"
+          whileTap={{ scale: 0.95 }}
+          className="rounded-lg p-2 text-primary transition hover:bg-surface-variant/50 lg:hidden"
+          aria-label="Menu"
+        >
+          <Menu size={20} />
+        </motion.button>
+        {showBrand ? (
+          <h1 className="font-display text-2xl font-bold text-primary">{APP_NAME}</h1>
+        ) : (
+          <motion.h1
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ ease: easePremium }}
+            className="font-display text-2xl font-bold text-primary"
+          >
+            {title}
+          </motion.h1>
+        )}
+        {showRepoPills && (
+          <div className="ml-4 hidden items-center gap-2 md:flex">
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.02, boxShadow: "0 0 20px rgba(128,131,255,0.15)" }}
+              className="flex items-center gap-2 rounded-lg border border-outline-variant/80 bg-surface-container-highest/80 px-3 py-1.5 font-code-sm text-sm text-on-surface-variant backdrop-blur-sm transition hover:border-primary/50"
+            >
+              <Terminal size={16} className="text-secondary" />
+              {DEFAULT_REPO}
+              <ChevronDown size={14} />
+            </motion.button>
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.02 }}
+              className="flex items-center gap-2 rounded-lg border border-outline-variant/60 bg-surface-container-highest/40 px-3 py-1.5 font-code-sm text-sm text-on-surface-variant backdrop-blur-sm transition hover:border-primary/40"
+            >
+              <GitBranch size={16} />
+              v2-api-service
+            </motion.button>
+          </div>
+        )}
+        {!showRepoPills && !showBrand && title && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="hidden items-center gap-2 rounded-full border border-outline-variant/70 bg-surface-container-highest/60 px-3 py-1 backdrop-blur-sm md:flex"
+          >
+            <Terminal size={14} className="text-secondary" />
+            <span className="font-label-caps text-on-surface-variant">{DEFAULT_REPO}</span>
+          </motion.div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-3">
+        {actions}
+        {showContextButton && (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="hidden border-primary/20 shadow-[0_0_24px_rgba(128,131,255,0.12)] sm:flex"
+          >
+            <Zap size={16} className="fill-primary text-primary" />
+            Right Contextual Intelligence
+          </Button>
+        )}
+        {showRunAnalysis && (
+          <Button
+            variant="accent"
+            size="sm"
+            onClick={onRunAnalysis}
+            className="shadow-[0_0_28px_rgba(128,131,255,0.35)]"
+          >
+            <Sparkles size={16} />
+            RUN ANALYSIS
+          </Button>
+        )}
+        {!showBrand && (
+          <button
+            type="button"
+            className="hidden rounded-lg border border-outline-variant/70 px-3 py-1 font-label-caps text-on-surface-variant transition hover:border-primary/30 hover:bg-surface-variant/40 sm:block"
+          >
+            {DEFAULT_REPO}
+          </button>
+        )}
+        {showBrand && (
+          <button
+            type="button"
+            className={cn(
+              "flex items-center gap-2 rounded-lg border border-outline-variant/70 px-3 py-1.5 font-label-caps text-on-surface-variant transition hover:border-primary/30 hover:bg-surface-variant/40"
+            )}
+          >
+            <Terminal size={16} />
+            {DEFAULT_REPO}
+          </button>
+        )}
+        <motion.button
+          type="button"
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          className="rounded-lg p-2 text-on-surface-variant transition hover:bg-surface-variant/50 hover:text-primary"
+          aria-label="Notifications"
+        >
+          <Bell size={18} />
+        </motion.button>
+        {!showContextButton && (
+          <motion.button
+            type="button"
+            whileHover={{ scale: 1.05 }}
+            className="rounded-lg p-2 text-on-surface-variant transition hover:bg-surface-variant/50 hover:text-primary"
+            aria-label="Settings"
+          >
+            <Settings size={18} />
+          </motion.button>
+        )}
+        <motion.div
+          whileHover={{ scale: 1.06 }}
+          className="relative flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-primary-container to-secondary-container text-xs font-bold text-on-primary-container shadow-[0_0_20px_rgba(128,131,255,0.35)]"
+        >
+          JD
+          <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border border-background bg-secondary status-pulse" />
+        </motion.div>
+      </div>
+    </header>
+  );
+}
+
+
+5. app/architecture/page.tsx
+"use client";
+
+import ArchitectureFlow from "@/components/features/ArchitectureFlow";
+import AppShell from "@/components/layout/AppShell";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { GlassPanel } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+
+const criticalPaths = [
+  { name: "Data Ingestion Flow", status: "optimal" as const },
+  {
+    name: "Auth Circular Dependency",
+    status: "critical" as const,
+    detail: "Bidirectional link between auth-engine.ts and session-guard.ts",
+  },
+];
+
+const clusters = [
+  { label: "Identity & Access", color: "bg-primary" },
+  { label: "Data Persistence", color: "bg-secondary" },
+  { label: "API Gateways", color: "bg-tertiary" },
+];
+
+export default function ArchitecturePage() {
+  return (
+    <AppShell title="Architecture Graph" showRunAnalysis fullBleed>
+      <div className="relative flex min-h-0 flex-1 grid-bg">
+        <ArchitectureFlow />
+        <div className="pointer-events-none absolute inset-0 z-10">
+          <div className="pointer-events-auto absolute left-6 top-6 space-y-2">
+            <GlassPanel className="min-w-[220px]">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="font-label-caps text-on-surface-variant">Engineering Metrics</span>
+                <span className="h-2 w-2 rounded-full bg-secondary" />
+              </div>
+              <div className="space-y-3 font-code-sm text-sm">
+                <div className="flex justify-between">
+                  <span className="text-on-surface-variant">Node Count</span>
+                  <span className="font-bold text-primary">1,248</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-on-surface-variant">Edge Density</span>
+                  <span className="font-bold text-primary">0.42</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-on-surface-variant">Semantic Cohesion</span>
+                  <div className="flex items-center gap-2">
+                    <Progress value={88} className="w-16" glow />
+                    <span className="font-bold text-secondary">88%</span>
+                  </div>
+                </div>
+              </div>
+            </GlassPanel>
+            <div className="glass-panel flex items-center gap-2 rounded-lg px-3 py-2">
+              <span className="font-code-sm text-xs uppercase text-on-surface-variant">Cluster View</span>
+              <Badge variant="muted">SEMANTIC_MAP_V2</Badge>
+            </div>
+          </div>
+          <div className="pointer-events-auto absolute right-6 top-6 w-72">
+            <GlassPanel>
+              <p className="mb-4 font-label-caps text-on-surface-variant">Critical Paths</p>
+              <div className="space-y-4">
+                {criticalPaths.map((path) => (
+                  <div key={path.name}>
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-sm font-medium text-on-surface">{path.name}</span>
+                      <Badge variant={path.status === "optimal" ? "optimal" : "critical"} dot>
+                        {path.status === "optimal" ? "OPTIMAL" : "CRITICAL"}
+                      </Badge>
+                    </div>
+                    {path.detail && <p className="mt-2 text-xs text-on-surface-variant">{path.detail}</p>}
+                  </div>
+                ))}
+              </div>
+              <Button variant="secondary" size="sm" className="mt-4 w-full">+ RESCAN REPO</Button>
+            </GlassPanel>
+          </div>
+          <div className="pointer-events-auto absolute bottom-6 left-6 w-56">
+            <GlassPanel>
+              <p className="mb-3 font-label-caps text-on-surface-variant">Vector Neighborhoods</p>
+              <ul className="space-y-2">
+                {clusters.map((c) => (
+                  <li key={c.label} className="flex items-center gap-2 text-sm">
+                    <span className={`h-2 w-2 rounded-full ${c.color}`} />
+                    {c.label}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-4 font-label-caps text-[10px] text-on-surface-variant">Clustering Sensitivity</p>
+              <input type="range" className="mt-2 w-full" defaultValue={60} />
+            </GlassPanel>
+          </div>
+          <div className="pointer-events-auto absolute left-1/2 top-1/3 -translate-x-1/2">
+            <div className="glass-panel rounded-lg border border-tertiary/40 px-3 py-2 text-center">
+              <p className="font-label-caps text-[10px] text-tertiary">Hotspot Detected</p>
+              <p className="font-code-sm text-sm text-on-surface">legacy-parser.cc (High Churn)</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </AppShell>
+  );
+}
+
+6. app/chat/page.tsx
+"use client";
+
+import { motion } from "framer-motion";
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  Paperclip,
+  Send,
+  Sparkles,
+} from "lucide-react";
+
+import CodeEditor from "@/components/features/CodeEditor";
+import AppShell from "@/components/layout/AppShell";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import SystemIndicator from "@/components/ui/SystemIndicator";
+import { ShimmerLine } from "@/components/ui/Shimmer";
+import { Card, GlassPanel } from "@/components/ui/card";
+
+const chunks = [
+  { file: "AuthService.ts", score: 0.98 },
+  { file: "middleware.ts", score: 0.85 },
+  { file: "session.ts", score: 0.72 },
+];
+
+const codeSample = `async function validateToken(token: string) {
+  const payload = await jwt.verify(token, SECRET);
+  return attachSessionContext(payload);
+}`;
+
+export default function ChatPage() {
+  return (
+    <AppShell
+      title="Code Intelligence Chat"
+      showRepoPills
+      showContextButton
+      fullBleed
+    >
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <section className="flex min-w-0 flex-1 flex-col bg-background">
+          <motion.div className="flex-1 overflow-y-auto px-[var(--container-padding)] py-8">
+            <div className="mx-auto max-w-3xl space-y-8">
+              <div className="flex items-start gap-4">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-outline-variant bg-surface-container-highest">
+                  <span className="text-xs text-on-surface-variant">U</span>
+                </div>
+                <p className="text-on-surface">
+                  Refactor the authentication middleware to use async JWT validation.
+                </p>
+              </div>
+
+              <GlassPanel className="border border-outline-variant/80 bg-surface-container-low/80">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-left"
+                >
+                  <span className="flex items-center gap-2 text-sm font-bold text-secondary">
+                    <Sparkles size={16} className="animate-pulse" />
+                    AI Reasoning: Analyzing context & logic
+                  </span>
+                  <ChevronDown size={16} className="text-on-surface-variant" />
+                </button>
+                <div className="mt-4 space-y-3 border-t border-outline-variant pt-4">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="h-2 w-2 rounded-full bg-secondary status-pulse" />
+                    <span className="font-bold text-secondary">Active Analysis</span>
+                  </div>
+                  <ul className="space-y-2 text-sm text-on-surface-variant">
+                    <li className="flex items-center gap-2">
+                      <ChevronRight size={14} className="text-secondary" />
+                      Indexed 12 semantic chunks across 4 files
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <ChevronRight size={14} className="text-secondary" />
+                      Mapping cross-file dependencies
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <ChevronRight size={14} className="text-secondary" />
+                      Generating refactor proposal
+                    </li>
+                  </ul>
+                </div>
+              </GlassPanel>
+
+              <div className="space-y-3">
+                <p className="font-label-caps text-on-surface-variant">
+                  Contextual Chunk Ranking
+                </p>
+                {chunks.map((c) => (
+                  <div key={c.file} className="space-y-1">
+                    <div className="flex justify-between font-code-sm text-sm">
+                      <span className="text-on-surface">{c.file}</span>
+                      <span className="text-primary">{c.score.toFixed(2)}</span>
+                    </div>
+                    <div className="h-1 overflow-hidden rounded-full bg-surface-variant">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${c.score * 100}%` }}
+                        transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
+                        className="h-full bg-gradient-to-r from-secondary-container to-secondary shadow-[0_0_10px_rgba(78,222,163,0.4)]"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <Card className="overflow-hidden">
+                <div className="flex items-center justify-between border-b border-outline-variant bg-surface-container-high px-4 py-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-code-md text-primary">AuthService.ts</span>
+                    <Badge variant="muted">Refactored</Badge>
+                  </div>
+                  <span className="font-code-sm text-xs text-on-surface-variant">
+                    Dep: AxiosInterceptor
+                  </span>
+                </div>
+                <div className="h-48">
+                  <CodeEditor value={codeSample} language="typescript" path="AuthService.ts" />
+                </div>
+              </Card>
+            </div>
+          </motion.div>
+
+          <div className="border-t border-outline-variant/60 bg-surface-container-low/90 p-4 backdrop-blur-xl">
+            <div className="mx-auto max-w-3xl">
+              <SystemIndicator
+                label="Generating contextual embeddings..."
+                className="mb-3"
+              />
+              <div className="mb-2 flex flex-wrap gap-4 font-code-sm text-xs text-on-surface-variant">
+                <span className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-secondary" />
+                  GPT-4-CLAUDE-HYBRID
+                </span>
+                <span>CONTEXT: 12 FILES</span>
+                <span>TOKENS: 14,200</span>
+                <span>RETR: 142MS</span>
+              </div>
+              <div className="flex items-end gap-3 rounded-xl border border-outline-variant/80 bg-surface-container-lowest/90 p-3 shadow-[0_0_32px_rgba(128,131,255,0.08)] backdrop-blur-md transition focus-within:border-primary/60 focus-within:shadow-[0_0_40px_rgba(128,131,255,0.15)] focus-within:ring-1 focus-within:ring-primary/40">
+                <textarea
+                  rows={2}
+                  placeholder="Ask follow-up or provide specific code to refactor..."
+                  className="flex-1 resize-none bg-transparent text-sm text-on-surface outline-none placeholder:text-on-surface-variant"
+                />
+                <button type="button" className="p-2 text-on-surface-variant hover:text-primary">
+                  <Paperclip size={18} />
+                </button>
+                <Button variant="primary" size="icon" className="shrink-0">
+                  <Send size={18} />
+                </Button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside className="hidden w-80 shrink-0 flex-col border-l border-outline-variant/60 bg-surface-container-low/80 backdrop-blur-xl xl:flex">
+          <div className="border-b border-outline-variant p-4">
+            <p className="font-label-caps text-on-surface-variant">Intelligence Stats</p>
+          </div>
+          <div className="flex-1 space-y-4 overflow-y-auto p-4">
+            <Card className="p-3">
+              <p className="font-label-caps text-on-surface-variant">Vector Semantic Map</p>
+              <pre className="mt-2 font-code-sm text-xs text-secondary">
+                {`match: AuthService.validateToken\nscore: 0.941`}
+              </pre>
+            </Card>
+            <GlassPanel animate={false} className="text-center">
+              <p className="font-label-caps text-on-surface-variant">Matching Score</p>
+              <p className="mt-2 text-4xl font-bold text-primary">0.941</p>
+            </GlassPanel>
+            <Card className="p-3">
+              <p className="mb-3 font-label-caps text-on-surface-variant">Dependency Graph</p>
+              <ul className="space-y-2 font-code-sm text-sm text-on-surface-variant">
+                <li className="text-primary">AuthService</li>
+                <li className="pl-4">→ AxiosInterceptor</li>
+                <li className="pl-4">→ LocalStorage</li>
+                <li className="pl-4">→ UserStore</li>
+              </ul>
+            </Card>
+            <Card className="ai-insight-border p-4">
+              <p className="text-sm leading-relaxed text-on-surface-variant">
+                JWT validation can be extracted to a shared middleware. Consider
+                rotating secrets via environment-backed key store.
+              </p>
+            </Card>
+          </div>
+        </aside>
+      </div>
+    </AppShell>
+  );
+}
+
+7. app/history/page.tsx
+"use client";
+
+import { motion } from "framer-motion";
+import { Clock, MessageSquare } from "lucide-react";
+import Link from "next/link";
+
+import AppShell from "@/components/layout/AppShell";
+import { Card } from "@/components/ui/card";
+
+const sessions = [
+  { id: "1", title: "JWT middleware refactor", time: "2h ago", tokens: "14.2k" },
+  { id: "2", title: "Vector store migration", time: "Yesterday", tokens: "8.1k" },
+  { id: "3", title: "API gateway architecture", time: "3 days ago", tokens: "22.4k" },
+];
+
+export default function HistoryPage() {
+  return (
+    <AppShell title="Session History">
+      <div className="mx-auto max-w-3xl space-y-4 p-[var(--container-padding)]">
+        {sessions.map((s, i) => (
+          <motion.div
+            key={s.id}
+            initial={{ opacity: 0, x: -8 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: i * 0.06 }}
+          >
+            <Link href="/chat">
+              <Card className="flex items-center justify-between p-4 transition hover:border-primary/40">
+                <div className="flex items-center gap-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface-container-high text-primary">
+                    <MessageSquare size={18} />
+                  </div>
+                  <div>
+                    <p className="font-medium text-on-surface">{s.title}</p>
+                    <p className="flex items-center gap-2 text-sm text-on-surface-variant">
+                      <Clock size={14} />
+                      {s.time}
+                    </p>
+                  </div>
+                </div>
+                <span className="font-code-sm text-xs text-on-surface-variant">{s.tokens}</span>
+              </Card>
+            </Link>
+          </motion.div>
+        ))}
+      </div>
+    </AppShell>
+  );
+}
+
+
+8. app/repositories/page.tsx
+"use client";
+
+import { motion } from "framer-motion";
+import { Filter, Plus, RefreshCw, Search, SortAsc, Terminal } from "lucide-react";
+
+import AppShell from "@/components/layout/AppShell";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
+
+const repos = [
+  {
+    name: "core-api-service",
+    url: "github.com/codemind-ai/core-api",
+    status: "synced" as const,
+    lastSync: "Oct 24, 2023 • 14:20",
+    icon: Terminal,
+  },
+  {
+    name: "frontend-monorepo",
+    url: "github.com/codemind-ai/frontend",
+    status: "indexing" as const,
+    progress: 68,
+    lastSync: "Indexing...",
+    icon: Terminal,
+  },
+  {
+    name: "legacy-auth",
+    url: "github.com/codemind-ai/legacy-auth",
+    status: "error" as const,
+    error: "Connection timeout: Authentication failed for remote host.",
+    lastSync: "Oct 22, 2023 • 09:15",
+    icon: Terminal,
+  },
+];
+
+export default function RepositoriesPage() {
+  return (
+    <AppShell title="CodeMind AI" showBrand>
+      <div className="mx-auto max-w-[var(--max-width-content,1200px)] space-y-8 p-[var(--container-padding)] pb-32">
+        <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
+          <div>
+            <h2 className="text-3xl font-semibold tracking-tight text-on-surface">
+              Repositories
+            </h2>
+            <p className="mt-2 text-on-surface-variant">
+              Manage your indexed codebases and AI context settings.
+            </p>
+          </div>
+          <Button variant="primary" size="lg">
+            <Plus size={18} />
+            Add Repository
+          </Button>
+        </div>
+
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+          <div className="relative w-full sm:max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" size={18} />
+            <Input placeholder="Search repositories..." className="pl-10" />
+          </div>
+          <div className="flex gap-2">
+            <Button variant="secondary" size="default">
+              <Filter size={16} />
+              FILTER
+            </Button>
+            <Button variant="secondary" size="default">
+              <SortAsc size={16} />
+              SORT
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          {repos.map((repo, i) => (
+            <motion.div
+              key={repo.name}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.06 }}
+            >
+              <Card
+                className={`flex flex-col gap-6 p-6 transition hover:border-primary/40 ${
+                  repo.status === "error" ? "border-l-2 border-l-tertiary" : ""
+                }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-12 w-12 items-center justify-center rounded bg-surface-container-high text-primary">
+                      <repo.icon size={28} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-on-surface">{repo.name}</h3>
+                      <p className="text-sm text-on-surface-variant">{repo.url}</p>
+                    </div>
+                  </div>
+                  <Badge
+                    variant={
+                      repo.status === "synced"
+                        ? "synced"
+                        : repo.status === "indexing"
+                          ? "indexing"
+                          : "error"
+                    }
+                    dot
+                  >
+                    {repo.status === "synced"
+                      ? "Synced"
+                      : repo.status === "indexing"
+                        ? "Indexing"
+                        : "Error"}
+                  </Badge>
+                </div>
+
+                {repo.status === "indexing" && repo.progress && (
+                  <Progress value={repo.progress} glow />
+                )}
+
+                {repo.status === "error" && repo.error && (
+                  <div className="rounded-lg border border-tertiary-container/30 bg-tertiary-container/10 p-3 font-code-sm text-sm text-tertiary">
+                    {repo.error}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between border-t border-outline-variant/30 pt-4">
+                  <div>
+                    <p className="font-label-caps text-[10px] text-on-surface-variant">
+                      {repo.status === "error" ? "Last Attempt" : "Last Sync"}
+                    </p>
+                    <p className="font-code-md text-sm text-on-surface">{repo.lastSync}</p>
+                  </div>
+                  <Button variant="ghost" size="sm">
+                    <RefreshCw size={16} />
+                    RE-INDEX
+                  </Button>
+                </div>
+              </Card>
+            </motion.div>
+          ))}
+        </div>
+
+        <Card className="flex flex-col items-center justify-center border-dashed p-12 text-center">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-high">
+            <Plus className="text-primary" size={24} />
+          </div>
+          <h3 className="text-lg font-bold text-on-surface">Connect New Codebase</h3>
+          <p className="mt-2 max-w-md text-sm text-on-surface-variant">
+            GitHub, GitLab, or SSH — index your repository for semantic intelligence.
+          </p>
+        </Card>
+      </div>
+    </AppShell>
+  );
+}
+
+9. app/semantic-search/page.tsx
+"use client";
+
+import { useState } from "react";
+import { motion } from "framer-motion";
+import { Network, Search, Sparkles } from "lucide-react";
+import Link from "next/link";
+
+import AppShell from "@/components/layout/AppShell";
+import FileExplorer from "@/components/layout/FileExplorer";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import SystemIndicator from "@/components/ui/SystemIndicator";
+import { Card, GlassPanel } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
+
+const results = [
+  {
+    file: "Engine.ts",
+    path: "src/lib/embeddings/",
+    score: 0.98,
+    snippet: `export async function embedBatch(chunks: string[]) {\n  return model.encode(chunks, { dim: 1536 });\n}`,
+  },
+  {
+    file: "SearchOverlay.tsx",
+    path: "src/components/",
+    score: 0.91,
+    snippet: `function SemanticMatch({ query }: { query: string }) {\n  return vectorStore.search(query, { k: 50 });\n}`,
+  },
+];
+
+const entities = [
+  { name: "VectorStoreCluster", type: "Infrastructure Component", icon: "◈" },
+  { name: "cosineSimilarity()", type: "Math Utility", icon: "Σ" },
+];
+
+export default function SemanticSearchPage() {
+  const [query, setQuery] = useState("semantic code embedding lo");
+  const [searching, setSearching] = useState(true);
+
+  return (
+    <AppShell title="CodeMind AI" showBrand fullBleed>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <FileExplorer />
+
+        <section className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-background p-[var(--container-padding)]">
+          <div className="mx-auto w-full max-w-4xl space-y-6">
+            <div className="relative">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant" size={20} />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="h-14 pl-12 pr-20 font-code-md text-base"
+              />
+              <kbd className="absolute right-4 top-1/2 -translate-y-1/2 rounded border border-outline-variant px-2 py-0.5 font-code-sm text-xs text-on-surface-variant">
+                ⌘ K
+              </kbd>
+            </div>
+
+            {searching && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex flex-wrap items-center gap-4"
+              >
+                <SystemIndicator label="Retrieving semantic vectors..." />
+                <span className="font-code-sm text-on-surface-variant">k=50</span>
+                <span className="font-code-sm text-on-surface-variant">p=0.8</span>
+                <span className="font-code-sm text-on-surface-variant">@ tokens=4.2k</span>
+              </motion.div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <p className="font-code-sm text-sm text-on-surface-variant">
+                4 RESULTS IN 12ms | 0.62 SEMANTIC SCORE
+              </p>
+              <div className="flex gap-2">
+                <Button variant="neon" size="sm">
+                  Semantic Match
+                </Button>
+                <Button variant="secondary" size="sm">
+                  Latest Commit
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {results.map((r) => (
+                <button
+                  key={r.file}
+                  type="button"
+                  className="rounded border border-outline-variant bg-surface-container-high px-3 py-1 font-code-sm text-sm text-primary hover:border-primary"
+                >
+                  {r.file} {r.score.toFixed(2)}
+                </button>
+              ))}
+            </div>
+
+            <div className="mb-2 flex items-center gap-2">
+              <span className="font-label-caps text-on-surface-variant">Semantic Match</span>
+              <Progress value={62} glow className="max-w-xs flex-1" />
+            </div>
+
+            {results.map((hit, i) => (
+              <motion.div
+                key={hit.file}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.08 }}
+              >
+                <Card className="overflow-hidden hover:border-primary/40">
+                  <div className="flex items-center justify-between border-b border-outline-variant bg-surface-container-high px-4 py-2">
+                    <div>
+                      <span className="font-code-md font-bold text-on-surface">{hit.file}</span>
+                      <span className="ml-2 font-code-sm text-on-surface-variant">{hit.path}</span>
+                    </div>
+                  </div>
+                  <pre className="overflow-x-auto p-4 font-code-md text-sm leading-relaxed">
+                    <code>
+                      <span className="text-tertiary">export</span>{" "}
+                      <span className="text-secondary">async function</span>{" "}
+                      <span className="text-primary">embedBatch</span>
+                      <span className="text-on-surface">(chunks: string[]) {"{"}</span>
+                      {"\n  "}
+                      <span className="text-on-surface-variant">return model.encode(chunks);</span>
+                      {"\n}"}
+                    </code>
+                  </pre>
+                </Card>
+              </motion.div>
+            ))}
+
+            <Link href="/architecture">
+              <Card className="group relative overflow-hidden p-0">
+                <div className="absolute inset-0 bg-gradient-to-r from-primary-container/20 to-secondary/10" />
+                <div className="relative flex items-center justify-between p-6">
+                  <div>
+                    <h3 className="text-lg font-bold text-on-surface">Explore Architecture</h3>
+                    <p className="mt-1 text-sm text-on-surface-variant">
+                      Visualize your codebase dependencies and clusters.
+                    </p>
+                  </div>
+                  <Network className="text-primary transition group-hover:scale-110" size={32} />
+                </div>
+              </Card>
+            </Link>
+          </div>
+        </section>
+
+        <aside className="hidden w-72 shrink-0 flex-col border-l border-outline-variant bg-surface-container-low p-4 lg:flex">
+          <p className="font-label-caps text-on-surface-variant">Relevant Entities</p>
+          <div className="mt-4 space-y-3">
+            {entities.map((e) => (
+              <Card key={e.name} className="flex items-start gap-3 p-3">
+                <span className="text-xl text-primary">{e.icon}</span>
+                <div>
+                  <p className="font-code-md text-sm font-bold text-on-surface">{e.name}</p>
+                  <p className="text-xs text-on-surface-variant">{e.type}</p>
+                </div>
+              </Card>
+            ))}
+          </div>
+          <GlassPanel className="ai-insight-border mt-6">
+            <div className="mb-2 flex items-center gap-2 text-primary">
+              <Sparkles size={16} />
+              <span className="font-label-caps">AI Insight</span>
+            </div>
+            <p className="text-sm leading-relaxed text-on-surface-variant">
+              Your embedding logic uses OpenAI v3-small. Updating to v3-large might
+              improve search precision for long-context queries.
+            </p>
+          </GlassPanel>
+        </aside>
+      </div>
+    </AppShell>
+  );
+}
+
+
+10. app/settings/layout.tsx
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import { IBM_Plex_Mono, JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import "./globals.css";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-space-grotesk",
+  subsets: ["latin"],
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains-mono",
+  subsets: ["latin"],
+});
+
+const ibmPlexMono = IBM_Plex_Mono({
+  variable: "--font-ibm-plex-mono",
+  weight: ["400", "500"],
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "CodeMind AI — Code Intelligence Platform",
+  description:
+    "Futuristic AI-native developer OS for codebase intelligence, architecture visualization, and semantic search.",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable} ${ibmPlexMono.variable} dark h-full antialiased`}
+    >
+      <body className="h-full overflow-hidden bg-background text-on-surface">
+        {children}
+      </body>
+    </html>
+  );
+}
+
+there are 2 settings/page.tsx
+11. app/settings/page.tsx (which is below layout.tsk)
+"use client";
+
+import { useState } from "react";
+
+import Sidebar from "../components/Sidebar";
+import ChatWindow from "../components/ChatWindow";
+import CodeExplorer from "../components/CodeExplorer";
+import CodePreview from "../components/CodePreview";
+
+export default function Home() {
+  const [selectedFile, setSelectedFile] = useState("Sidebar.tsx");
+
+  return (
+    <main className="relative h-screen overflow-hidden bg-black text-white">
+      
+      {/* Background Glow Effects */}
+      <div className="pointer-events-none absolute top-[-200px] left-[-200px] h-[500px] w-[500px] rounded-full bg-cyan-500/20 blur-[180px] animate-pulse" />
+
+      <div className="pointer-events-none absolute bottom-[-200px] right-[-200px] h-[500px] w-[500px] rounded-full bg-purple-500/20 blur-[180px] animate-pulse" />
+
+      {/* Main Layout */}
+      <div className="relative z-10 flex h-full backdrop-blur-xl pointer-events-auto">
+        
+        {/* Sidebar */}
+        <Sidebar />
+
+        {/* Center Area */}
+        <div className="flex flex-1">
+          
+          {/* Chat Section */}
+          <ChatWindow />
+
+          {/* Code Preview */}
+          <CodePreview selectedFile={selectedFile} />
+        </div>
+
+        {/* Repository Explorer */}
+        <CodeExplorer setSelectedFile={setSelectedFile} />
+      </div>
+    </main>
+  );
+}
+
+12. app/settings/page.tsx (top one)
+"use client";
+
+import { motion } from "framer-motion";
+
+import AppShell from "@/components/layout/AppShell";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+const sections = [
+  {
+    title: "LLM Configuration",
+    items: [
+      {
+        label: "Inference Model",
+        description: "Choose the primary engine for code generation.",
+        control: (
+          <div className="relative w-full md:w-64">
+            <select className="w-full appearance-none rounded-lg border border-outline-variant bg-surface-container-lowest px-4 py-2 text-on-surface outline-none focus:border-primary focus:ring-1 focus:ring-primary">
+              <option>GPT-4o (Default)</option>
+              <option>Claude 3.5 Sonnet</option>
+              <option>Llama 3.1 405B</option>
+            </select>
+          </div>
+        ),
+      },
+      {
+        label: "Temperature",
+        description: "Controls randomness. Lower is more deterministic.",
+        control: (
+          <motion.div className="w-full space-y-3">
+            <div className="flex justify-end">
+              <span className="rounded bg-surface-variant px-2 py-0.5 font-code-md text-primary">
+                0.7
+              </span>
+            </div>
+            <input type="range" min={0} max={1} step={0.1} defaultValue={0.7} className="w-full" />
+          </motion.div>
+        ),
+      },
+    ],
+  },
+  {
+    title: "Vector Store",
+    items: [
+      {
+        label: "Indexing Depth",
+        description: "How many folder levels to crawl during indexing.",
+        control: (
+          <div className="flex items-center gap-3 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2">
+            <button type="button" className="text-on-surface-variant hover:text-primary">
+              −
+            </button>
+            <span className="font-code-md text-on-surface">4</span>
+            <button type="button" className="text-on-surface-variant hover:text-primary">
+              +
+            </button>
+          </div>
+        ),
+      },
+      {
+        label: "Ignore Patterns",
+        description: "Glob patterns excluded from the vector index.",
+        control: (
+          <textarea
+            defaultValue={"node_modules/**, .git/**, dist/**"}
+            className="min-h-[100px] w-full rounded-lg border border-outline-variant bg-surface-container-lowest p-4 font-code-md text-sm text-on-surface outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+          />
+        ),
+      },
+    ],
+  },
+  {
+    title: "Personalization",
+    items: [
+      {
+        label: "Custom Instructions",
+        description: "Guide the AI personality and response style.",
+        control: (
+          <textarea
+            placeholder="Always prefer functional patterns. Explain security implications..."
+            className="min-h-[120px] w-full rounded-lg border border-outline-variant border-l-[3px] border-l-primary-container bg-surface-container-lowest p-4 text-sm text-on-surface outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+          />
+        ),
+      },
+    ],
+  },
+];
+
+export default function SettingsPage() {
+  return (
+    <AppShell title="Settings" hideSidebar>
+      <div className="flex min-h-0 flex-1">
+        <aside className="hidden w-[var(--sidebar-width)] flex-col border-r border-outline-variant bg-surface-container-low py-4 md:flex">
+          <div className="mb-6 flex items-center gap-3 px-6">
+            <div className="flex h-8 w-8 items-center justify-center rounded bg-primary">
+              <span className="text-xs font-bold text-on-primary">CM</span>
+            </div>
+            <span className="text-xl font-bold text-primary">CodeMind AI</span>
+          </div>
+          <nav className="flex-1 space-y-1 px-2">
+            {["Chat", "Repositories", "Files", "History"].map((item) => (
+              <div
+                key={item}
+                className="rounded-lg px-4 py-3 text-on-surface-variant hover:bg-surface-variant"
+              >
+                {item}
+              </div>
+            ))}
+            <div className="rounded-lg bg-secondary-container px-4 py-3 font-bold text-on-secondary-container">
+              Settings
+            </div>
+          </nav>
+          <div className="border-t border-outline-variant px-4 py-4">
+            <p className="font-bold text-on-surface">Lead Developer</p>
+            <p className="text-sm text-on-surface-variant">Pro Plan</p>
+          </div>
+        </aside>
+
+        <div className="flex-1 overflow-y-auto">
+          <section className="mx-auto max-w-4xl space-y-8 p-[var(--container-padding)]">
+            {sections.map((section, si) => (
+              <motion.div
+                key={section.title}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: si * 0.08 }}
+              >
+                <h2 className="mb-4 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+                  {section.title}
+                </h2>
+                <Card className="divide-y divide-outline-variant overflow-hidden">
+                  {section.items.map((item) => (
+                    <div
+                      key={item.label}
+                      className="flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between"
+                    >
+                      <div>
+                        <p className="font-bold text-on-surface">{item.label}</p>
+                        <p className="text-sm text-on-surface-variant">{item.description}</p>
+                      </div>
+                      <div className="w-full md:w-auto md:min-w-[200px]">{item.control}</div>
+                    </div>
+                  ))}
+                </Card>
+              </motion.div>
+            ))}
+            <Button variant="primary" size="lg">
+              Save Changes
+            </Button>
+          </section>
+        </div>
+      </div>
+    </AppShell>
+  );
+}
+
+
+13. components/ambient/ambientlayer.tss
+"use client";
+
+import { motion } from "framer-motion";
+
+import { glowPulse } from "@/lib/motion/presets";
+
+type AmbientLayerProps = {
+  intensity?: "subtle" | "medium";
+};
+
+export default function AmbientLayer({ intensity = "medium" }: AmbientLayerProps) {
+  const opacity = intensity === "subtle" ? 0.35 : 0.5;
+
+  return (
+    <motion.div
+      aria-hidden
+      className="pointer-events-none absolute inset-0 overflow-hidden"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 1.2 }}
+    >
+      <motion.div
+        {...glowPulse}
+        className="absolute -left-[20%] -top-[25%] h-[55vh] w-[55vh] rounded-full bg-cyan-400/20 blur-[120px]"
+        style={{ opacity }}
+      />
+      <motion.div
+        animate={{
+          opacity: [0.25, 0.45, 0.25],
+          x: [0, 20, 0],
+        }}
+        transition={{ duration: 9, repeat: Infinity, ease: "easeInOut", delay: 1 }}
+        className="absolute -right-[15%] top-[10%] h-[50vh] w-[50vh] rounded-full bg-primary-container/25 blur-[130px]"
+      />
+      <motion.div
+        animate={{
+          opacity: [0.2, 0.38, 0.2],
+          y: [0, -16, 0],
+        }}
+        transition={{ duration: 11, repeat: Infinity, ease: "easeInOut", delay: 0.5 }}
+        className="absolute bottom-[-10%] left-[30%] h-[45vh] w-[45vh] rounded-full bg-secondary/15 blur-[110px]"
+      />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_70%_50%_at_50%_0%,rgba(192,193,255,0.06),transparent_55%)]" />
+      <div className="os-grid absolute inset-0 opacity-[0.45]" />
+    </motion.div>
+  );
+}
+
+
+14. components/features/architectureflow.tsx
+"use client";
+
+import { useCallback, useMemo } from "react";
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  MiniMap,
+  addEdge,
+  useNodesState,
+  useEdgesState,
+  type Connection,
+  type Edge,
+  type Node,
+} from "@xyflow/react";
+
+const initialNodes: Node[] = [
+  {
+    id: "auth",
+    position: { x: 280, y: 120 },
+    data: { label: "auth-engine.ts" },
+    style: nodeStyle("primary", true),
+  },
+  {
+    id: "db",
+    position: { x: 480, y: 280 },
+    data: { label: "postgres-client.rs" },
+    style: nodeStyle("secondary"),
+  },
+  {
+    id: "parser",
+    position: { x: 120, y: 320 },
+    data: { label: "semantic-parser.py" },
+    style: nodeStyle("primary"),
+  },
+  {
+    id: "legacy",
+    position: { x: 640, y: 180 },
+    data: { label: "legacy-parser.cc" },
+    style: nodeStyle("tertiary", true),
+  },
+  {
+    id: "api",
+    position: { x: 380, y: 420 },
+    data: { label: "api-gateway.ts" },
+    style: nodeStyle("secondary"),
+  },
+];
+
+const initialEdges: Edge[] = [
+  {
+    id: "e1",
+    source: "auth",
+    target: "db",
+    animated: true,
+    style: { stroke: "#c0c1ff", strokeWidth: 2 },
+  },
+  {
+    id: "e2",
+    source: "parser",
+    target: "auth",
+    style: { stroke: "#4edea3", strokeWidth: 1.5, opacity: 0.7 },
+  },
+  {
+    id: "e3",
+    source: "db",
+    target: "api",
+    animated: true,
+    style: { stroke: "#4edea3", strokeWidth: 2 },
+  },
+  {
+    id: "e4",
+    source: "legacy",
+    target: "parser",
+    style: { stroke: "#ffb2b7", strokeWidth: 1.5, opacity: 0.5 },
+  },
+];
+
+function nodeStyle(accent: "primary" | "secondary" | "tertiary", pulse = false) {
+  const colors = {
+    primary: { border: "#c0c1ff", glow: "rgba(192,193,255,0.45)", bg: "rgba(128,131,255,0.12)" },
+    secondary: { border: "#4edea3", glow: "rgba(78,222,163,0.45)", bg: "rgba(78,222,163,0.1)" },
+    tertiary: { border: "#ffb2b7", glow: "rgba(255,178,183,0.4)", bg: "rgba(255,81,106,0.1)" },
+  };
+  const c = colors[accent];
+  return {
+    padding: "10px 18px",
+    borderRadius: 999,
+    border: `1px solid ${c.border}`,
+    background: `linear-gradient(145deg, ${c.bg}, rgba(20,20,20,0.92))`,
+    color: "#e5e2e1",
+    fontSize: 12,
+    fontFamily: "var(--font-mono)",
+    boxShadow: `0 0 24px ${c.glow}, 0 4px 16px rgba(0,0,0,0.4)`,
+    animation: pulse ? "node-breathe 3s ease-in-out infinite" : undefined,
+  };
+}
+
+export default function ArchitectureFlow() {
+  const [nodes, , onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  const defaultEdgeOptions = useMemo(
+    () => ({
+      style: { strokeWidth: 1.5 },
+      type: "smoothstep" as const,
+    }),
+    []
+  );
+
+  const onConnect = useCallback(
+    (connection: Connection) =>
+      setEdges((eds) =>
+        addEdge(
+          {
+            ...connection,
+            animated: true,
+            style: { stroke: "#4edea3", strokeWidth: 2 },
+          },
+          eds
+        )
+      ),
+    [setEdges]
+  );
+
+  return (
+    <div className="relative h-full w-full">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_30%_40%,rgba(192,193,255,0.08),transparent_50%),radial-gradient(ellipse_at_70%_60%,rgba(78,222,163,0.06),transparent_50%)]"
+      />
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        defaultEdgeOptions={defaultEdgeOptions}
+        fitView
+        proOptions={{ hideAttribution: true }}
+        className="bg-transparent"
+      >
+        <Background gap={28} size={1} color="rgba(255,255,255,0.035)" />
+        <Controls />
+        <MiniMap
+          nodeColor={(n) => {
+            const id = n.id;
+            if (id === "legacy") return "#ffb2b7";
+            if (id === "db" || id === "api") return "#4edea3";
+            return "#c0c1ff";
+          }}
+          maskColor="rgba(10, 10, 10, 0.85)"
+          className="!rounded-lg !border-outline-variant/80 !shadow-[0_0_24px_rgba(0,0,0,0.5)]"
+        />
+      </ReactFlow>
+    </div>
+  );
+}
+
+
+15. components/features/codeeditor.tsx
+"use client";
+
+import dynamic from "next/dynamic";
+import { motion } from "framer-motion";
+
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
+  ssr: false,
+  loading: () => (
+    <motion.div
+      animate={{ opacity: [0.4, 0.8, 0.4] }}
+      transition={{ duration: 1.5, repeat: Infinity }}
+      className="flex h-full items-center justify-center text-sm text-zinc-500"
+    >
+      Initializing editor...
+    </motion.div>
+  ),
+});
+
+type CodeEditorProps = {
+  value: string;
+  language?: string;
+  path?: string;
+  readOnly?: boolean;
+};
+
+export default function CodeEditor({
+  value,
+  language = "typescript",
+  path,
+  readOnly = true,
+}: CodeEditorProps) {
+  return (
+    <MonacoEditor
+      height="100%"
+      language={language}
+      path={path}
+      value={value}
+      theme="vs-dark"
+      options={{
+        readOnly,
+        minimap: { enabled: false },
+        fontSize: 13,
+        lineHeight: 22,
+        fontFamily: "var(--font-geist-mono), ui-monospace, monospace",
+        scrollBeyondLastLine: false,
+        padding: { top: 16, bottom: 16 },
+        renderLineHighlight: "line",
+        roundedSelection: true,
+        smoothScrolling: true,
+        cursorBlinking: "smooth",
+        overviewRulerLanes: 0,
+        hideCursorInOverviewRuler: true,
+        scrollbar: {
+          verticalScrollbarSize: 8,
+          horizontalScrollbarSize: 8,
+        },
+      }}
+    />
+  );
+}
+
+
+16. components/ui.bage.tsx
+import { cva, type VariantProps } from "class-variance-authority";
+
+import { cn } from "@/lib/utils/cn";
+
+const badgeVariants = cva(
+  "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold",
+  {
+    variants: {
+      variant: {
+        synced:
+          "border-secondary/30 bg-secondary-container/20 text-secondary",
+        indexing:
+          "border-primary-container/40 bg-primary-container/20 text-primary",
+        error:
+          "border-tertiary-container/40 bg-tertiary-container/20 text-tertiary",
+        optimal:
+          "border-secondary/30 bg-secondary-container/20 text-secondary",
+        critical:
+          "border-tertiary-container/40 bg-tertiary-container/20 text-tertiary",
+        muted:
+          "border-outline-variant bg-surface-container-high text-on-surface-variant",
+      },
+    },
+    defaultVariants: {
+      variant: "muted",
+    },
+  }
+);
+
+export interface BadgeProps
+  extends React.HTMLAttributes<HTMLDivElement>,
+    VariantProps<typeof badgeVariants> {
+  dot?: boolean;
+}
+
+export function Badge({ className, variant, dot, children, ...props }: BadgeProps) {
+  return (
+    <div className={cn(badgeVariants({ variant }), className)} {...props}>
+      {dot && (
+        <span
+          className={cn(
+            "h-1.5 w-1.5 rounded-full",
+            variant === "synced" || variant === "optimal"
+              ? "bg-secondary"
+              : variant === "indexing"
+                ? "bg-primary animate-pulse"
+                : variant === "critical" || variant === "error"
+                  ? "bg-tertiary"
+                  : "bg-outline"
+          )}
+        />
+      )}
+      {children}
+    </div>
+  );
+}
+
+
+
+17. components/ui/button.tsx
+import * as React from "react";
+import { Slot } from "@radix-ui/react-slot";
+import { cva, type VariantProps } from "class-variance-authority";
+
+import { cn } from "@/lib/utils/cn";
+
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-bold transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]",
+  {
+    variants: {
+      variant: {
+        primary:
+          "bg-primary text-on-primary hover:opacity-90 shadow-[0_0_20px_rgba(128,131,255,0.25)] hover:shadow-[0_0_32px_rgba(128,131,255,0.4)]",
+        secondary:
+          "bg-surface-container-high border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-variant",
+        ghost:
+          "text-on-surface-variant hover:bg-surface-variant hover:text-on-surface",
+        accent:
+          "bg-primary-container text-on-primary-container hover:opacity-90 shadow-[0_0_24px_rgba(128,131,255,0.3)] hover:shadow-[0_0_36px_rgba(128,131,255,0.45)]",
+        neon:
+          "bg-secondary-container text-on-secondary-container hover:brightness-110",
+      },
+      size: {
+        default: "h-10 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-12 px-6 text-base",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "primary",
+      size: "default",
+    },
+  }
+);
+
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+    VariantProps<typeof buttonVariants> {
+  asChild?: boolean;
+}
+
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant, size, asChild = false, ...props }, ref) => {
+    const Comp = asChild ? Slot : "button";
+    return (
+      <Comp
+        className={cn(buttonVariants({ variant, size, className }))}
+        ref={ref}
+        {...props}
+      />
+    );
+  }
+);
+Button.displayName = "Button";
+
+export { Button, buttonVariants };
+
+
+19. components/ui/card.tsx
+"use client";
+
+import * as React from "react";
+import { motion } from "framer-motion";
+
+import { easePremium } from "@/lib/motion/presets";
+import { cn } from "@/lib/utils/cn";
+
+export function Card({
+  className,
+  children,
+  hover = true,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement> & { hover?: boolean }) {
+  return (
+    <div
+      className={cn(
+        "glass-card rounded-xl",
+        hover && "hover:-translate-y-0.5",
+        className
+      )}
+      {...props}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function GlassPanel({
+  className,
+  children,
+  animate = true,
+}: {
+  className?: string;
+  children: React.ReactNode;
+  animate?: boolean;
+}) {
+  const classes = cn("glass-panel rounded-xl p-4", className);
+
+  if (!animate) {
+    return <div className={classes}>{children}</div>;
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: easePremium }}
+      whileHover={{ y: -1 }}
+      className={classes}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+20. components/ui/glasscard.tsx
+export { GlassPanel as default, GlassPanel, Card } from "@/components/ui/card";
+
+
+21. components/ui/glowbutton.tsx
+export { Button as default, Button } from "@/components/ui/button";
+
+22. components/ui/input.tsx
+import * as React from "react";
+
+import { cn } from "@/lib/utils/cn";
+
+export const Input = React.forwardRef<
+  HTMLInputElement,
+  React.InputHTMLAttributes<HTMLInputElement>
+>(({ className, type, ...props }, ref) => (
+  <input
+    type={type}
+    className={cn(
+      "flex h-11 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-4 py-2 text-sm text-on-surface outline-none transition-colors placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-1 focus:ring-primary",
+      className
+    )}
+    ref={ref}
+    {...props}
+  />
+));
+Input.displayName = "Input";
+
+
+23. components/ui/progress.tsx
+import * as React from "react";
+import * as ProgressPrimitive from "@radix-ui/react-progress";
+
+import { cn } from "@/lib/utils/cn";
+
+export function Progress({
+  className,
+  value,
+  glow = false,
+  ...props
+}: React.ComponentProps<typeof ProgressPrimitive.Root> & { glow?: boolean }) {
+  return (
+    <ProgressPrimitive.Root
+      className={cn(
+        "relative h-2 w-full overflow-hidden rounded-full bg-surface-variant",
+        className
+      )}
+      {...props}
+    >
+      <ProgressPrimitive.Indicator
+        className={cn(
+          "h-full flex-1 bg-secondary transition-all",
+          glow && "shadow-[0_0_8px_rgba(78,222,163,0.5)]"
+        )}
+        style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
+      />
+    </ProgressPrimitive.Root>
+  );
+}
+
+
+24. components/ui/.tsx
+import { cn } from "@/lib/utils/cn";
+
+export function ShimmerLine({ className }: { className?: string }) {
+  return <div className={cn("shimmer-line h-1 rounded-full", className)} />;
+}
+
+
+25. components/ui/systemindicator.tsx
+"use client";
+
+import { motion } from "framer-motion";
+
+import { cn } from "@/lib/utils/cn";
+
+type SystemIndicatorProps = {
+  label: string;
+  active?: boolean;
+  variant?: "secondary" | "primary" | "tertiary";
+  className?: string;
+  meta?: string;
+};
+
+const dotColors = {
+  secondary: "bg-secondary shadow-[0_0_10px_rgba(78,222,163,0.7)]",
+  primary: "bg-primary shadow-[0_0_10px_rgba(192,193,255,0.7)]",
+  tertiary: "bg-tertiary shadow-[0_0_10px_rgba(255,178,183,0.5)]",
+};
+
+export default function SystemIndicator({
+  label,
+  active = true,
+  variant = "secondary",
+  className,
+  meta,
+}: SystemIndicatorProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -4 }}
+      animate={{ opacity: 1, x: 0 }}
+      className={cn("flex flex-wrap items-center gap-2 font-code-sm text-xs", className)}
+    >
+      {active && (
+        <motion.span
+          animate={{ opacity: [1, 0.45, 1] }}
+          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+          className={cn("h-1.5 w-1.5 rounded-full", dotColors[variant])}
+        />
+      )}
+      <span
+        className={cn(
+          "font-semibold tracking-wide",
+          variant === "secondary" && "text-secondary",
+          variant === "primary" && "text-primary",
+          variant === "tertiary" && "text-tertiary"
+        )}
+      >
+        {label}
+      </span>
+      {meta && <span className="text-on-surface-variant">{meta}</span>}
+    </motion.div>
+  );
+}
+
+26. components/chatwindow.tsx
+import { SendHorizonal, Sparkles } from "lucide-react";
+
+export default function ChatWindow() {
+  return (
+    <main className="flex-1 flex flex-col bg-black/40 text-white">
+
+      <div className="border-b border-white/10 bg-white/[0.03] backdrop-blur-xl px-8 py-5 flex items-center justify-between">
+
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">
+            Codebase Assistant
+          </h1>
+
+          <p className="text-sm text-zinc-500 mt-1">
+            AI-powered semantic understanding
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2 bg-white/[0.04] px-4 py-2 rounded-2xl border border-white/10 backdrop-blur-xl shadow-[0_0_20px_rgba(0,255,255,0.08)]">
+          <Sparkles size={16} className="text-cyan-400" />
+
+          <span className="text-sm text-zinc-300">
+            GPT Enhanced
+          </span>
+        </div>
+
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-14 py-12 space-y-10">
+
+        <div className="max-w-3xl">
+          <div className="bg-white/[0.03] backdrop-blur-xl p-6 rounded-[26px] border border-white/10 shadow-[0_0_30px_rgba(255,255,255,0.03)]">
+            Explain the authentication flow in this project.
+          </div>
+        </div>
+
+        <div className="max-w-5xl ml-auto">
+          <div className="bg-gradient-to-br from-cyan-500 via-blue-500 to-purple-600 p-7 rounded-[28px] shadow-[0_0_80px_rgba(168,85,247,0.45)] border border-white/10 backdrop-blur-xl hover:scale-[1.01] transition-all duration-500">
+
+            <p className="leading-relaxed text-[16px] text-white/95">
+              The authentication flow begins inside the middleware layer where JWT validation is handled before protected routes are accessed.
+            </p>
+
+          </div>
+        </div>
+
+      </div>
+
+      <div className="border-t border-white/10 p-6 bg-black/20 backdrop-blur-xl">
+
+        <div className="flex items-center bg-white/[0.03] backdrop-blur-xl border border-white/10 rounded-2xl px-5 py-4 focus-within:border-cyan-500 transition shadow-[0_0_30px_rgba(0,255,255,0.08)]">
+
+          <input
+            type="text"
+            placeholder="Ask about your codebase..."
+            className="flex-1 bg-transparent outline-none text-white placeholder:text-zinc-500 text-[15px] tracking-wide"
+          />
+
+          <button className="ml-4 bg-gradient-to-r from-cyan-500 to-purple-500 text-white p-3 rounded-xl hover:scale-110 transition-all duration-300 shadow-[0_0_30px_rgba(168,85,247,0.3)]">
+            <SendHorizonal size={18} />
+          </button>
+
+        </div>
+
+      </div>
+
+    </main>
+  );
+}
+
+27. components/codeexplorer.tsx
+import {
+    Folder,
+    FileCode2,
+    ChevronDown,
+  } from "lucide-react";
+  
+  type CodeExplorerProps = {
+    setSelectedFile: (file: string) => void;
+  };
+  
+  export default function CodeExplorer({
+    setSelectedFile,
+  }: CodeExplorerProps) {
+  
+    return (
+      <aside className="w-80 border-l border-white/10 bg-white/[0.03] backdrop-blur-2xl flex flex-col shadow-[0_0_50px_rgba(0,0,0,0.35)]">
+  
+        {/* Header */}
+        <div className="border-b border-white/10 px-5 py-4 bg-black/10 backdrop-blur-xl">
+  
+          <h2 className="text-2xl font-bold text-white">
+            Repository Explorer
+          </h2>
+  
+          <p className="text-sm text-zinc-500 mt-1">
+            codemind-ai
+          </p>
+  
+        </div>
+  
+        {/* Explorer */}
+        <div className="flex-1 overflow-y-auto p-5 text-sm">
+  
+          {/* src */}
+          <div className="flex items-center gap-2 text-zinc-300 mb-4 font-medium">
+  
+            <ChevronDown size={16} />
+  
+            <Folder size={16} />
+  
+            src
+  
+          </div>
+  
+          <div className="ml-6 space-y-3">
+  
+            {/* components */}
+            <div className="flex items-center gap-2 text-zinc-400 hover:text-cyan-400 cursor-pointer transition-all duration-300 hover:translate-x-1">
+  
+              <Folder size={15} />
+  
+              components
+  
+            </div>
+  
+            <div className="ml-6 space-y-3 mt-2">
+  
+              {/* Sidebar.tsx */}
+              <div
+                onClick={() => setSelectedFile("Sidebar.tsx")}
+                className="flex items-center gap-2 text-cyan-400 cursor-pointer transition-all duration-300 hover:translate-x-1"
+              >
+  
+                <FileCode2 size={15} />
+  
+                Sidebar.tsx
+  
+              </div>
+  
+              {/* ChatWindow.tsx */}
+              <div
+                onClick={() => setSelectedFile("ChatWindow.tsx")}
+                className="flex items-center gap-2 text-zinc-400 hover:text-cyan-400 cursor-pointer transition-all duration-300 hover:translate-x-1"
+              >
+  
+                <FileCode2 size={15} />
+  
+                ChatWindow.tsx
+  
+              </div>
+  
+              {/* CodeExplorer.tsx */}
+              <div
+                onClick={() => setSelectedFile("CodeExplorer.tsx")}
+                className="flex items-center gap-2 text-zinc-400 hover:text-cyan-400 cursor-pointer transition-all duration-300 hover:translate-x-1"
+              >
+  
+                <FileCode2 size={15} />
+  
+                CodeExplorer.tsx
+  
+              </div>
+  
+            </div>
+  
+            {/* page.tsx */}
+            <div
+              onClick={() => setSelectedFile("page.tsx")}
+              className="flex items-center gap-2 text-zinc-400 hover:text-cyan-400 cursor-pointer transition-all duration-300 hover:translate-x-1 mt-4"
+            >
+  
+              <FileCode2 size={15} />
+  
+              page.tsx
+  
+            </div>
+  
+          </div>
+  
+        </div>
+  
+      </aside>
+    );
+  }
+
+28. components/codepreview.tsx
+type CodePreviewProps = {
+    selectedFile: string;
+  };
+  
+  export default function CodePreview({
+    selectedFile,
+  }: CodePreviewProps) {
+  
+    const codeExamples: Record<string, string> = {
+      "Sidebar.tsx": `export default function Sidebar() {
+    return (
+      <aside className="sidebar">
+        <button>
+          New Chat
+        </button>
+      </aside>
+    );
+  }`,
+  
+      "ChatWindow.tsx": `export default function ChatWindow() {
+    return (
+      <main>
+        <input placeholder="Ask AI..." />
+      </main>
+    );
+  }`,
+  
+      "CodeExplorer.tsx": `export default function CodeExplorer() {
+    return (
+      <div>
+        Repository Explorer
+      </div>
+    );
+  }`,
+    };
+  
+    return (
+      <div className="w-[480px] border-l border-white/10 bg-black/30 backdrop-blur-2xl flex flex-col overflow-hidden">
+  
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-white/10 bg-white/[0.03] backdrop-blur-xl flex items-center justify-between">
+  
+          <div>
+            <h2 className="text-lg font-semibold text-white">
+              {selectedFile}
+            </h2>
+  
+            <p className="text-sm text-zinc-500 mt-1">
+              src/components/{selectedFile}
+            </p>
+          </div>
+  
+          <div className="px-3 py-1 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-sm">
+            React + Tailwind
+          </div>
+  
+        </div>
+  
+        {/* Code Area */}
+        <div className="flex-1 overflow-auto p-6 font-mono text-sm leading-7 text-zinc-300">
+  
+          <pre className="whitespace-pre-wrap">
+            {codeExamples[selectedFile]}
+          </pre>
+  
+        </div>
+  
+      </div>
+    );
+  }
+
+29. components/messagebubble.tsx
+
+
+30. components/sidebar.tsx
+
+export { default } from "@/components/layout/Sidebar";
+
+31. components/topbar.tsx
+export { default } from "@/components/layout/Topbar";
+
+
+32. lib/constant/cide-samples.tsx
+export const SAMPLE_FILES: Record<
+  string,
+  { language: string; path: string; content: string }
+> = {
+  "Sidebar.tsx": {
+    language: "typescript",
+    path: "src/components/layout/Sidebar.tsx",
+    content: `export default function Sidebar() {
+  return (
+    <aside className="sidebar">
+      <nav>{/* Neural navigation */}</nav>
+    </aside>
+  );
+}`,
+  },
+  "AppShell.tsx": {
+    language: "typescript",
+    path: "src/components/layout/AppShell.tsx",
+    content: `export default function AppShell({ children }) {
+  return (
+    <motion.div className="os-shell">
+      <Sidebar />
+      <main>{children}</main>
+    </motion.div>
+  );
+}`,
+  },
+  "rag-pipeline.py": {
+    language: "python",
+    path: "backend/rag/pipeline.py",
+    content: `async def embed_chunks(chunks: list[str]) -> list[list[float]]:
+    vectors = await embedding_client.encode(chunks)
+    await vector_store.upsert(vectors)
+    return vectors`,
+  },
+};
+
+
+33. lib/constants/navigation/tsx
+import {
+  MessageSquare,
+  FolderGit2,
+  FolderOpen,
+  History,
+  Network,
+  Search,
+  Settings,
+} from "lucide-react";
+
+import type { NavItem } from "@/lib/types/navigation";
+
+export const APP_NAME = "CodeMind AI";
+
+export const PRIMARY_NAV: NavItem[] = [
+  {
+    href: "/chat",
+    label: "Chat",
+    description: "Code intelligence workspace",
+    icon: MessageSquare,
+  },
+  {
+    href: "/repositories",
+    label: "Repositories",
+    description: "Indexed codebases",
+    icon: FolderGit2,
+  },
+  {
+    href: "/architecture",
+    label: "Architecture",
+    description: "System topology graph",
+    icon: Network,
+  },
+  {
+    href: "/semantic-search",
+    label: "Files",
+    description: "Semantic search & explorer",
+    icon: FolderOpen,
+  },
+  {
+    href: "/history",
+    label: "History",
+    description: "Session timeline",
+    icon: History,
+  },
+  {
+    href: "/settings",
+    label: "Settings",
+    description: "Platform configuration",
+    icon: Settings,
+  },
+];
+
+export const DEFAULT_REPO = "main-repo";
+
+
+34. lib/motion/presets.tsx
+export const easePremium = [0.22, 1, 0.36, 1] as const;
+
+export const fadeUp = {
+  initial: { opacity: 0, y: 10 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.45, ease: easePremium },
+};
+
+export const fadeIn = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  transition: { duration: 0.4, ease: easePremium },
+};
+
+export const staggerContainer = {
+  animate: {
+    transition: { staggerChildren: 0.06, delayChildren: 0.04 },
+  },
+};
+
+export const hoverLift = {
+  whileHover: { y: -2, transition: { duration: 0.2 } },
+  whileTap: { scale: 0.99 },
+};
+
+export const glowPulse = {
+  animate: {
+    opacity: [0.35, 0.55, 0.35],
+    scale: [1, 1.02, 1],
+  },
+  transition: {
+    duration: 6,
+    repeat: Infinity,
+    ease: "easeInOut" as const,
+  },
+};
+
+
+35. lib/types/navigation.tsx
+import type { LucideIcon } from "lucide-react";
+
+export type NavItem = {
+  href: string;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+};
+
+export type BreadcrumbItem = {
+  label: string;
+  href?: string;
+};
+
+36. lib/utils/cn.tsx
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
