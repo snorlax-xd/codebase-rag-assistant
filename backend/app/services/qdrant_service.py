@@ -62,12 +62,10 @@ def store_embedding(file_data, embedding):
 
 
 def search_similar_chunks(query_embedding):
-
-    search_results = client.search(
+    search_results = client.query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=query_embedding,
+        query=query_embedding,
         limit=5
     )
-
-    return search_results
+    return search_results.points
 
