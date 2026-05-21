@@ -11,7 +11,7 @@ client = QdrantClient(
 )
 
 COLLECTION_NAME = "codebase_chunks"
-EMBEDDING_DIM = 768
+EMBEDDING_DIM = 3072
 
 def create_collection():
     collections = client.get_collections().collections

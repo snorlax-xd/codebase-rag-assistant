@@ -4,8 +4,9 @@ import requests
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 def generate_embedding(text: str):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key={GEMINI_API_KEY}"
     payload = {
+        "model": "models/gemini-embedding-001",
         "content": {
             "parts": [{"text": text}]
         }
