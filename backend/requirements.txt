@@ -61,3 +61,5 @@ tree-sitter-typescript
 tree-sitter-java
 tree-sitter-python
 ollama
+sentence-transformers
+torch

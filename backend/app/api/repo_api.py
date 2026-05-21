@@ -92,3 +92,10 @@ async def ask_question(query: str = Query(..., min_length=1, max_length=2000)):
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(executor, _ask_sync, query)
     return result
+
+
+@router.delete("/delete-collection")
+def delete_collection():
+    from app.services.qdrant_service import client, COLLECTION_NAME
+    client.delete_collection(COLLECTION_NAME)
+    return {"status": "deleted", "collection": COLLECTION_NAME}

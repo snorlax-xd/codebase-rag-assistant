@@ -1,33 +1,30 @@
-import ollama
+import os
+from openai import OpenAI
 
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def generate_response(query: str, context_chunks):
+MAX_CONTEXT_CHARS = 6000
 
-    context_text = "\n\n".join(context_chunks)
+def generate_response(query: str, context_chunks: list[str]) -> str:
+    combined = ""
+    for chunk in context_chunks:
+        if len(combined) + len(chunk) > MAX_CONTEXT_CHARS:
+            break
+        combined += chunk + "\n\n"
 
-    prompt = f"""
-You are an expert code assistant.
-
-Answer the user's question using ONLY the provided code context.
-
-CODE CONTEXT:
-{context_text}
-
-QUESTION:
-{query}
-
-ANSWER:
-"""
-
-    response = ollama.chat(
-        model="llama3",
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
         messages=[
             {
+                "role": "system",
+                "content": "You are an expert code assistant. Answer using ONLY the provided code context. Be precise and technical."
+            },
+            {
                 "role": "user",
-                "content": prompt
+                "content": f"CODE CONTEXT:\n{combined.strip()}\n\nQUESTION:\n{query}"
             }
-        ]
+        ],
+        max_tokens=1000,
+        temperature=0.2
     )
-
-    return response["message"]["content"]
-
+    return response.choices[0].message.content

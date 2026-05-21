@@ -4,7 +4,6 @@ from qdrant_client.models import PointStruct
 import uuid
 import os
 
-EMBEDDING_DIM = 768
 
 client = QdrantClient(
     host=os.getenv("QDRANT_HOST", "localhost"),
@@ -12,37 +11,23 @@ client = QdrantClient(
 )
 
 COLLECTION_NAME = "codebase_chunks"
-
+EMBEDDING_DIM = 1536
 
 def create_collection():
-
     collections = client.get_collections().collections
-
-    collection_names = [
-        collection.name
-        for collection in collections
-    ]
+    collection_names = [c.name for c in collections]
 
     if COLLECTION_NAME not in collection_names:
-
         client.create_collection(
             collection_name=COLLECTION_NAME,
-
             vectors_config=VectorParams(
                 size=EMBEDDING_DIM,
                 distance=Distance.COSINE
             )
         )
+        return {"status": "created", "collection": COLLECTION_NAME}
 
-        return {
-            "status": "created",
-            "collection": COLLECTION_NAME
-        }
-
-    return {
-        "status": "already_exists",
-        "collection": COLLECTION_NAME
-    }
+    return {"status": "already_exists", "collection": COLLECTION_NAME}
 
 
 def store_embedding(file_data, embedding):
