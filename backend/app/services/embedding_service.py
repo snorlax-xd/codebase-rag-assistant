@@ -1,11 +1,11 @@
 import os
-from openai import OpenAI
+import google.generativeai as genai
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 def generate_embedding(text: str):
-    response = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=text
+    result = genai.embed_content(
+        model="models/text-embedding-004",
+        content=text
     )
-    return response.data[0].embedding
+    return result["embedding"]

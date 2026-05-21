@@ -1,7 +1,9 @@
 import os
-from openai import OpenAI
+import google.generativeai as genai
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 MAX_CONTEXT_CHARS = 6000
 
@@ -12,19 +14,15 @@ def generate_response(query: str, context_chunks: list[str]) -> str:
             break
         combined += chunk + "\n\n"
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are an expert code assistant. Answer using ONLY the provided code context. Be precise and technical."
-            },
-            {
-                "role": "user",
-                "content": f"CODE CONTEXT:\n{combined.strip()}\n\nQUESTION:\n{query}"
-            }
-        ],
-        max_tokens=1000,
-        temperature=0.2
-    )
-    return response.choices[0].message.content
+    prompt = f"""You are an expert code assistant. Answer the user's question using ONLY the provided code context. Be precise and technical.
+
+CODE CONTEXT:
+{combined.strip()}
+
+QUESTION:
+{query}
+
+ANSWER:"""
+
+    response = model.generate_content(prompt)
+    return response.text
