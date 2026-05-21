@@ -13,6 +13,9 @@ def generate_embedding(text: str):
         }
     }
 
+    # Proactive delay — stay under 100 req/min free tier limit
+    time.sleep(0.7)
+
     for attempt in range(7):
         response = requests.post(url, json=payload)
 
@@ -20,7 +23,7 @@ def generate_embedding(text: str):
             return response.json()["embedding"]["values"]
 
         if response.status_code in (429, 503):
-            wait = 15 * (attempt + 1)
+            wait = 30 * (attempt + 1)
             print(f"API error {response.status_code}, waiting {wait}s before retry {attempt + 1}/7...")
             time.sleep(wait)
             continue
