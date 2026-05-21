@@ -13,18 +13,18 @@ def generate_embedding(text: str):
         }
     }
 
-    for attempt in range(5):
+    for attempt in range(7):
         response = requests.post(url, json=payload)
 
         if response.status_code == 200:
             return response.json()["embedding"]["values"]
 
-        if response.status_code == 429:
-            wait = 10 * (attempt + 1)
-            print(f"Rate limit hit, waiting {wait}s before retry {attempt + 1}/5...")
+        if response.status_code in (429, 503):
+            wait = 15 * (attempt + 1)
+            print(f"API error {response.status_code}, waiting {wait}s before retry {attempt + 1}/7...")
             time.sleep(wait)
             continue
 
         raise Exception(f"Gemini embedding error {response.status_code}: {response.text}")
 
-    raise Exception("Gemini embedding failed after 5 retries due to rate limiting")
+    raise Exception("Gemini embedding failed after 7 retries")
