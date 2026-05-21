@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -11,9 +12,19 @@ def generate_embedding(text: str):
             "parts": [{"text": text}]
         }
     }
-    response = requests.post(url, json=payload)
 
-    if not response.ok:
+    for attempt in range(5):
+        response = requests.post(url, json=payload)
+
+        if response.status_code == 200:
+            return response.json()["embedding"]["values"]
+
+        if response.status_code == 429:
+            wait = 10 * (attempt + 1)
+            print(f"Rate limit hit, waiting {wait}s before retry {attempt + 1}/5...")
+            time.sleep(wait)
+            continue
+
         raise Exception(f"Gemini embedding error {response.status_code}: {response.text}")
 
-    return response.json()["embedding"]["values"]
+    raise Exception("Gemini embedding failed after 5 retries due to rate limiting")
