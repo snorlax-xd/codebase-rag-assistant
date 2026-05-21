@@ -1,11 +1,11 @@
 import os
-import google.generativeai as genai
+from google import genai
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 def generate_embedding(text: str):
-    result = genai.embed_content(
+    result = client.models.embed_content(
         model="models/text-embedding-004",
-        content=text
+        contents=text
     )
-    return result["embedding"]
+    return result.embeddings[0].values
