@@ -48,7 +48,8 @@ def scan_repository(repo_path: str):
                 try:
                     with open(full_path, "r", encoding="utf-8") as source_file:
                         source_code = source_file.read()
-
+                    file_data["content"] = source_code
+                    
                     if file_extension == ".py":
                         # Deep parse: extract individual functions and classes
                         parsed_output = parse_python_code(source_code)
