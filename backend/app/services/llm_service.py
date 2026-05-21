@@ -1,11 +1,7 @@
 import os
-from google import genai
-from google.genai import types
+import requests
 
-client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY"),
-    http_options=types.HttpOptions(api_version="v1")
-)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 MAX_CONTEXT_CHARS = 6000
 
@@ -26,8 +22,12 @@ QUESTION:
 
 ANSWER:"""
 
-    response = client.models.generate_content(
-        model="gemini-1.5-flash",
-        contents=prompt
-    )
-    return response.text
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [
+            {"parts": [{"text": prompt}]}
+        ]
+    }
+    response = requests.post(url, json=payload)
+    response.raise_for_status()
+    return response.json()["candidates"][0]["content"]["parts"][0]["text"]
