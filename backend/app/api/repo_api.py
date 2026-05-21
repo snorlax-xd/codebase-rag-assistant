@@ -99,3 +99,14 @@ def delete_collection():
     from app.services.qdrant_service import client, COLLECTION_NAME
     client.delete_collection(COLLECTION_NAME)
     return {"status": "deleted", "collection": COLLECTION_NAME}
+
+
+@router.get("/collection-info")
+def collection_info():
+    from app.services.qdrant_service import client, COLLECTION_NAME
+    info = client.get_collection(COLLECTION_NAME)
+    return {
+        "vectors_count": info.vectors_count,
+        "indexed_vectors_count": info.indexed_vectors_count,
+        "status": str(info.status)
+    }
