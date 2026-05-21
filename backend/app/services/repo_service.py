@@ -124,7 +124,10 @@ def index_repository(repo_path: str):
     }
 
 
-def search_repository(query: str):
+def search_repository(query):
+
+    from app.services.embedding_service import generate_embedding
+    from app.services.qdrant_service import search_similar_chunks
 
     query_embedding = generate_embedding(query)
 
@@ -134,12 +137,13 @@ def search_repository(query: str):
 
     for result in results:
 
+        payload = result.payload or {}
+
         formatted_results.append({
             "score": result.score,
-            "file_name": result.payload.get("file_name"),
-            "language": result.payload.get("language"),
-            "path": result.payload.get("path"),
-            "content": result.payload.get("content")
+            "file_name": payload.get("file_name"),
+            "path": payload.get("path"),
+            "content": payload.get("content", "")[:1000]
         })
 
     return formatted_results
