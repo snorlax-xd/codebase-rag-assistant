@@ -12,5 +12,8 @@ def generate_embedding(text: str):
         }
     }
     response = requests.post(url, json=payload)
-    response.raise_for_status()
+    
+    if not response.ok:
+        raise Exception(f"Gemini embedding error {response.status_code}: {response.text}")
+    
     return response.json()["embedding"]["values"]
