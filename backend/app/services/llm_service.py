@@ -2,7 +2,6 @@ import os
 import requests
 
 
-# Use SAME env variable everywhere
 GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 MODEL_NAME = "gemini-1.5-flash"
@@ -15,13 +14,11 @@ def generate_response(
     context_chunks: list[str]
 ) -> str:
 
-    # Validate API key
     if not GEMINI_API_KEY:
         raise Exception(
             "GOOGLE_API_KEY environment variable missing"
         )
 
-    # Build combined context safely
     combined = ""
 
     for chunk in context_chunks:
@@ -34,7 +31,6 @@ def generate_response(
 
         combined += chunk + "\n\n"
 
-    # Prevent empty context failures
     if not combined.strip():
         combined = "No relevant code context found."
 
@@ -43,14 +39,7 @@ You are an expert code assistant.
 
 Answer the user's question using ONLY the provided code context.
 
-Be:
-- precise
-- technical
-- concise
-- code-aware
-
-If the answer is not present in the context,
-say that clearly.
+Be technical, precise, and concise.
 
 CODE CONTEXT:
 {combined.strip()}
@@ -61,9 +50,9 @@ QUESTION:
 ANSWER:
 """
 
-    # Correct Gemini endpoint
+    # IMPORTANT: use v1 here
     url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
+        f"https://generativelanguage.googleapis.com/v1/"
         f"models/{MODEL_NAME}:generateContent"
         f"?key={GEMINI_API_KEY}"
     )
@@ -95,7 +84,6 @@ ANSWER:
         timeout=120
     )
 
-    # Better debugging
     if response.status_code != 200:
 
         print("========== GEMINI GENERATION ERROR ==========")
@@ -110,7 +98,6 @@ ANSWER:
 
     data = response.json()
 
-    # Safe parsing
     candidates = data.get("candidates")
 
     if not candidates:
