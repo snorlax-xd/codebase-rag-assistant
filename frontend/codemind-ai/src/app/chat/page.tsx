@@ -8,7 +8,6 @@ import {
   Paperclip,
   Send,
   Sparkles,
-  Zap,
 } from "lucide-react";
 
 import CodeEditor from "@/components/features/CodeEditor";
@@ -16,16 +15,10 @@ import AppShell from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import SystemIndicator from "@/components/ui/SystemIndicator";
-import { ShimmerLine } from "@/components/ui/Shimmer";
 import { Card, GlassPanel } from "@/components/ui/card";
 import { askQuestion } from "@/lib/api/client";
-// ── Types ─────────────────────────────────────────────────────────────────────
 
-type Message = {
-  role: "user" | "ai";
-  text: string;
-  codeBlocks?: CodeBlock[];
-};
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type CodeBlock = {
   filename: string;
@@ -35,44 +28,14 @@ type CodeBlock = {
   code: string;
 };
 
+type Message = {
+  role: "user" | "ai";
+  text: string;
+  codeBlocks?: CodeBlock[];
+  isLoading?: boolean;
+};
+
 // ── Static data ───────────────────────────────────────────────────────────────
-
-const chunks = [
-  { file: "AuthService.ts", score: 0.98 },
-  { file: "middleware.ts", score: 0.85 },
-  { file: "session.ts", score: 0.72 },
-];
-
-const authCode = `private isRefreshing = false;
-private refreshSubscribers: ((token: string) => void)[] = [];
-
-async refreshToken() {
-  if (this.isRefreshing) {
-    return new Promise(resolve => {
-      this.refreshSubscribers.push(resolve);
-    });
-  }
-  this.isRefreshing = true;
-  const result = await authApi.refresh();
-  this.isRefreshing = false;`;
-
-const interceptorCode = `export class AxiosInterceptor {
-  setup(instance: AxiosInstance) {
-    instance.interceptors.response.use(
-      (res) => res,
-      async (error) => {
-        const original = error.config;
-        if (error.response?.status === 401) {
-          return this.authService.refreshToken()
-            .then(token => {
-              original.headers.Authorization = token;
-              return instance(original);
-            });
-        }
-      }
-    );
-  }
-}`;
 
 const initialMessages: Message[] = [
   {
@@ -88,23 +51,28 @@ const initialMessages: Message[] = [
         badge: "Refactored",
         dep: "Dep: AxiosInterceptor",
         language: "typescript",
-        code: authCode,
-      },
-      {
-        filename: "AxiosInterceptor.ts",
-        dep: "Dep: AxiosInterceptor",
-        language: "typescript",
-        code: interceptorCode,
+        code: `private isRefreshing = false;
+private refreshSubscribers: ((token: string) => void)[] = [];
+
+async refreshToken() {
+  if (this.isRefreshing) {
+    return new Promise(resolve => {
+      this.refreshSubscribers.push(resolve);
+    });
+  }
+  this.isRefreshing = true;
+  const result = await authApi.refresh();
+  this.isRefreshing = false;
+}`,
       },
     ],
   },
 ];
 
-const reasoningSteps = [
-  { done: true, text: "Indexed 12 semantic chunks from src/auth" },
-  { done: true, text: "Identified refreshToken() as critical path." },
-  { done: false, text: "Mapping cross-file dependencies..." },
-  { done: false, text: "Analyzing Mutex implementation in concurrency helper..." },
+const staticChunks = [
+  { file: "AuthService.ts", score: 0.98 },
+  { file: "middleware.ts", score: 0.85 },
+  { file: "session.ts", score: 0.72 },
 ];
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -120,13 +88,40 @@ function UserMessage({ text }: { text: string }) {
   );
 }
 
+function LoadingMessage() {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-outline-variant bg-primary/10">
+        <Sparkles size={14} className="animate-pulse text-primary" />
+      </div>
+      <div className="flex items-center gap-2 pt-2">
+        {[0, 1, 2].map((i) => (
+          <motion.span
+            key={i}
+            className="h-2 w-2 rounded-full bg-primary"
+            animate={{ opacity: [0.3, 1, 0.3] }}
+            transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.2 }}
+          />
+        ))}
+        <span className="text-xs text-on-surface-variant ml-1">
+          Retrieving context and generating answer...
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function AiMessage({ message }: { message: Message }) {
   const [reasoningOpen, setReasoningOpen] = useState(true);
   const [activeTab, setActiveTab] = useState(0);
 
+  const chunks = message.codeBlocks?.map((b) => ({
+    file: b.filename,
+    score: parseFloat(b.dep?.replace("Score: ", "") || "0"),
+  })) ?? staticChunks;
+
   return (
     <div className="space-y-4">
-      {/* AI avatar + reasoning panel */}
       <div className="flex items-start gap-3">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-outline-variant bg-primary/10">
           <Sparkles size={14} className="text-primary" />
@@ -168,64 +163,50 @@ function AiMessage({ message }: { message: Message }) {
                       </span>
                     </div>
                     <ul className="space-y-2 text-sm">
-                      {reasoningSteps.map((step, i) => (
+                      {[
+                        { done: true, text: "Semantic search across indexed chunks" },
+                        { done: true, text: "Retrieved top matching code segments" },
+                        { done: true, text: "Generated contextual answer" },
+                      ].map((step, i) => (
                         <li key={i} className="flex items-center gap-2">
-                          {step.done ? (
-                            <ChevronRight
-                              size={14}
-                              className="text-secondary"
-                            />
-                          ) : (
-                            <motion.span
-                              animate={{ opacity: [1, 0.4, 1] }}
-                              transition={{
-                                duration: 1.5,
-                                repeat: Infinity,
-                                delay: i * 0.3,
-                              }}
-                              className="h-3 w-3 rounded-full border border-secondary/60"
-                            />
-                          )}
-                          <span
-                            className={
-                              step.done
-                                ? "text-on-surface"
-                                : "text-on-surface-variant"
-                            }
-                          >
-                            {step.text}
-                          </span>
+                          <ChevronRight size={14} className="text-secondary" />
+                          <span className="text-on-surface">{step.text}</span>
                         </li>
                       ))}
                     </ul>
 
                     {/* Chunk ranking */}
-                    <div className="mt-4 space-y-2 border-t border-outline-variant pt-4">
-                      <p className="font-label-caps text-xs text-on-surface-variant">
-                        CONTEXTUAL CHUNK RANKING
-                      </p>
-                      {chunks.map((c) => (
-                        <div key={c.file} className="space-y-1">
-                          <div className="flex justify-between font-mono text-xs">
-                            <span className="text-on-surface">{c.file}</span>
-                            <span className="text-primary">
-                              {c.score.toFixed(2)}
-                            </span>
+                    {chunks.length > 0 && (
+                      <div className="mt-4 space-y-2 border-t border-outline-variant pt-4">
+                        <p className="font-label-caps text-xs text-on-surface-variant">
+                          CONTEXTUAL CHUNK RANKING
+                        </p>
+                        {chunks.slice(0, 3).map((c, i) => (
+                          <div key={i} className="space-y-1">
+                            <div className="flex justify-between font-mono text-xs">
+                              <span className="text-on-surface truncate max-w-[200px]">
+                                {c.file}
+                              </span>
+                              <span className="text-primary">
+                                {c.score > 0 ? c.score.toFixed(3) : "—"}
+                              </span>
+                            </div>
+                            <div className="h-1 overflow-hidden rounded-full bg-surface-variant">
+                              <motion.div
+                                initial={{ width: 0 }}
+                                animate={{
+                                  width: c.score > 0
+                                    ? `${c.score * 100}%`
+                                    : `${90 - i * 15}%`,
+                                }}
+                                transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
+                                className="h-full bg-gradient-to-r from-secondary-container to-secondary shadow-[0_0_10px_rgba(78,222,163,0.4)]"
+                              />
+                            </div>
                           </div>
-                          <div className="h-1 overflow-hidden rounded-full bg-surface-variant">
-                            <motion.div
-                              initial={{ width: 0 }}
-                              animate={{ width: `${c.score * 100}%` }}
-                              transition={{
-                                duration: 0.8,
-                                ease: [0.22, 1, 0.36, 1],
-                              }}
-                              className="h-full bg-gradient-to-r from-secondary-container to-secondary shadow-[0_0_10px_rgba(78,222,163,0.4)]"
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               )}
@@ -233,18 +214,17 @@ function AiMessage({ message }: { message: Message }) {
           </GlassPanel>
 
           {/* AI prose response */}
-          <p className="text-sm leading-relaxed text-on-surface">
+          <p className="text-sm leading-relaxed text-on-surface whitespace-pre-wrap">
             {message.text}
           </p>
 
           {/* Code blocks with tabs */}
           {message.codeBlocks && message.codeBlocks.length > 0 && (
             <Card className="overflow-hidden">
-              {/* Tab bar */}
               <div className="flex items-center gap-1 border-b border-outline-variant bg-surface-container-high px-3 py-2 overflow-x-auto">
                 {message.codeBlocks.map((block, i) => (
                   <button
-                    key={block.filename}
+                    key={i}
                     type="button"
                     onClick={() => setActiveTab(i)}
                     className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs font-mono transition whitespace-nowrap ${
@@ -266,13 +246,11 @@ function AiMessage({ message }: { message: Message }) {
                   </button>
                 ))}
               </div>
-
-              {/* Active code panel */}
               <div className="h-64">
                 <CodeEditor
-                  value={message.codeBlocks[activeTab].code}
-                  language={message.codeBlocks[activeTab].language}
-                  path={message.codeBlocks[activeTab].filename}
+                  value={message.codeBlocks[activeTab]?.code ?? ""}
+                  language={message.codeBlocks[activeTab]?.language ?? "python"}
+                  path={message.codeBlocks[activeTab]?.filename ?? "file"}
                 />
               </div>
             </Card>
@@ -288,36 +266,54 @@ function AiMessage({ message }: { message: Message }) {
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, isLoading]);
 
+  const send = async () => {
+    if (!input.trim() || isLoading) return;
+    const userText = input.trim();
+    setInput("");
+    setIsLoading(true);
+    setMessages((prev) => [...prev, { role: "user", text: userText }]);
 
-const send = async () => {
-  if (!input.trim()) return;
-  const userMessage = input.trim();
-  setInput("");
-  setMessages((prev) => [...prev, { role: "user", text: userMessage }]);
+    try {
+      const data = await askQuestion(userText);
 
-  try {
-    const data = await askQuestion(userMessage);
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "ai",
-        text: data.answer,
-        sources: data.sources,
-      },
-    ]);
-  } catch (err) {
-    setMessages((prev) => [
-      ...prev,
-      { role: "ai", text: "Error reaching backend. Is it running?" },
-    ]);
-  }
-};
+      const codeBlocks: CodeBlock[] = (data.sources ?? [])
+        .filter((s: any) => s.content)
+        .slice(0, 3)
+        .map((s: any) => ({
+          filename: s.file_name ?? "result.py",
+          badge: "Retrieved",
+          dep: `Score: ${s.score?.toFixed(3) ?? "0.000"}`,
+          language: s.language?.toLowerCase() ?? "python",
+          code: s.content,
+        }));
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          text: data.answer ?? "No answer returned.",
+          codeBlocks,
+        },
+      ]);
+    } catch (err: any) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          text: `Error: ${err?.message ?? "Could not reach backend. Make sure it is running."}`,
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <AppShell
@@ -338,6 +334,7 @@ const send = async () => {
                   <AiMessage key={i} message={m} />
                 )
               )}
+              {isLoading && <LoadingMessage />}
               <div ref={bottomRef} />
             </div>
           </div>
@@ -345,19 +342,17 @@ const send = async () => {
           {/* ── Input bar ── */}
           <div className="border-t border-outline-variant/60 bg-surface-container-low/90 p-4 backdrop-blur-xl">
             <div className="mx-auto max-w-3xl">
-              {/* Status row */}
               <div className="mb-2 flex flex-wrap items-center gap-4 font-mono text-xs text-on-surface-variant">
                 <SystemIndicator
-                  label="Generating contextual embeddings..."
+                  label={isLoading ? "Generating answer..." : "Ready"}
                   className="mr-2"
                 />
                 <span className="flex items-center gap-1.5">
                   <span className="h-1.5 w-1.5 rounded-full bg-secondary" />
-                  GPT-4-CLAUDE-HYBRID
+                  GEMINI-1.5-FLASH
                 </span>
-                <span>CONTEXT: 12 FILES</span>
-                <span>TOKENS: 14,200</span>
-                <span>RETR: 142MS</span>
+                <span>GEMINI-EMBEDDING-001</span>
+                <span>QDRANT RAG</span>
                 <button
                   type="button"
                   className="rounded border border-outline-variant px-2 py-0.5 text-[10px] uppercase tracking-widest text-on-surface-variant hover:border-primary hover:text-primary transition"
@@ -366,7 +361,6 @@ const send = async () => {
                 </button>
               </div>
 
-              {/* Textarea + actions */}
               <div className="flex items-end gap-3 rounded-xl border border-outline-variant/80 bg-surface-container-lowest/90 p-3 shadow-[0_0_32px_rgba(128,131,255,0.08)] backdrop-blur-md transition focus-within:border-primary/60 focus-within:shadow-[0_0_40px_rgba(128,131,255,0.15)] focus-within:ring-1 focus-within:ring-primary/40">
                 <textarea
                   rows={2}
@@ -378,8 +372,13 @@ const send = async () => {
                       send();
                     }
                   }}
-                  placeholder="Ask follow-up or provide specific code to refactor..."
-                  className="flex-1 resize-none bg-transparent text-sm text-on-surface outline-none placeholder:text-on-surface-variant"
+                  placeholder={
+                    isLoading
+                      ? "Waiting for response..."
+                      : "Ask about your codebase..."
+                  }
+                  disabled={isLoading}
+                  className="flex-1 resize-none bg-transparent text-sm text-on-surface outline-none placeholder:text-on-surface-variant disabled:opacity-50"
                 />
                 <button
                   type="button"
@@ -391,6 +390,7 @@ const send = async () => {
                   variant="primary"
                   size="icon"
                   onClick={send}
+                  disabled={isLoading || !input.trim()}
                   className="shrink-0"
                 >
                   <Send size={18} />
@@ -413,7 +413,9 @@ const send = async () => {
                 Vector Semantic Map
               </p>
               <pre className="mt-2 font-mono text-xs text-secondary">
-                {`match: AuthService.validateToken\nscore: 0.941`}
+                {messages.at(-1)?.codeBlocks?.[0]
+                  ? `match: ${messages.at(-1)!.codeBlocks![0].filename}\nscore: ${messages.at(-1)!.codeBlocks![0].dep?.replace("Score: ", "") ?? "—"}`
+                  : `match: —\nscore: —`}
               </pre>
             </Card>
 
@@ -421,21 +423,25 @@ const send = async () => {
               <p className="font-label-caps text-on-surface-variant">
                 Matching Score
               </p>
-              <p className="mt-2 text-4xl font-bold text-primary">0.941</p>
+              <p className="mt-2 text-4xl font-bold text-primary">
+                {messages.at(-1)?.codeBlocks?.[0]?.dep?.replace("Score: ", "") ?? "—"}
+              </p>
             </GlassPanel>
 
             <Card className="p-3">
               <p className="mb-3 font-label-caps text-on-surface-variant">
-                Dependency Graph
+                Retrieved Files
               </p>
               <ul className="space-y-2 font-mono text-sm text-on-surface-variant">
-                <li className="flex items-center gap-2 text-primary">
-                  <span className="h-2 w-2 rounded-full bg-primary" />
-                  AuthService
-                </li>
-                <li className="pl-4">→ AxiosInterceptor</li>
-                <li className="pl-4">→ LocalStorage</li>
-                <li className="pl-4">→ UserStore (C...)</li>
+                {messages.at(-1)?.codeBlocks?.length ? (
+                  messages.at(-1)!.codeBlocks!.map((b, i) => (
+                    <li key={i} className={i === 0 ? "text-primary" : "pl-2"}>
+                      {i === 0 ? "" : "→ "}{b.filename}
+                    </li>
+                  ))
+                ) : (
+                  <li className="text-on-surface-variant">No files retrieved yet</li>
+                )}
               </ul>
             </Card>
 
@@ -451,9 +457,7 @@ const send = async () => {
                   { label: "Misc", value: 6, color: "bg-outline" },
                 ].map((item) => (
                   <div key={item.label} className="flex items-center gap-2">
-                    <span
-                      className={`h-2 w-2 rounded-full ${item.color}`}
-                    />
+                    <span className={`h-2 w-2 rounded-full ${item.color}`} />
                     <span className="flex-1 text-xs text-on-surface-variant">
                       {item.label}
                     </span>
@@ -467,8 +471,9 @@ const send = async () => {
 
             <Card className="ai-insight-border p-4">
               <p className="text-sm leading-relaxed text-on-surface-variant">
-                JWT validation can be extracted to a shared middleware.
-                Consider rotating secrets via environment-backed key store.
+                {messages.at(-1)?.role === "ai"
+                  ? messages.at(-1)!.text.slice(0, 120) + "..."
+                  : "Ask a question to see AI insights here."}
               </p>
             </Card>
           </div>
