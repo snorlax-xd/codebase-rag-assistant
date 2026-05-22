@@ -59,3 +59,4 @@ tree-sitter-javascript
 tree-sitter-typescript
 tree-sitter-java
 tree-sitter-python
+google-generativeai==0.8.5

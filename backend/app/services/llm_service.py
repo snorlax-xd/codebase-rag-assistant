@@ -1,44 +1,51 @@
 import os
 import time
-import requests
+import google.generativeai as genai
 
 
-# ==============================
+# ==========================================
 # CONFIG
-# ==============================
+# ==========================================
 
-GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# Most stable publicly supported model
-MODEL_NAME = "gemini-1.5-flash-latest"
+if not GOOGLE_API_KEY:
+    raise Exception(
+        "GOOGLE_API_KEY environment variable missing"
+    )
 
-# Context size safety
+genai.configure(api_key=GOOGLE_API_KEY)
+
+# MOST STABLE MODEL
+MODEL_NAME = "gemini-1.5-flash"
+
+# Context safety
 MAX_CONTEXT_CHARS = 12000
 
-# API timeout
-REQUEST_TIMEOUT = 120
+# Retry config
+MAX_RETRIES = 3
 
 
-# ==============================
+# ==========================================
+# MODEL INITIALIZATION
+# ==========================================
+
+model = genai.GenerativeModel(MODEL_NAME)
+
+
+# ==========================================
 # RESPONSE GENERATION
-# ==============================
+# ==========================================
 
 def generate_response(
     query: str,
     context_chunks: list[str]
 ) -> str:
 
-    # ------------------------------
-    # Validate API key
-    # ------------------------------
-    if not GEMINI_API_KEY:
-        raise Exception(
-            "GOOGLE_API_KEY environment variable missing"
-        )
-
-    # ------------------------------
+    # --------------------------------------
     # Build context safely
-    # ------------------------------
+    # --------------------------------------
+
     combined_context = ""
 
     for chunk in context_chunks:
@@ -51,7 +58,6 @@ def generate_response(
         if not chunk:
             continue
 
-        # Prevent oversized prompt
         if (
             len(combined_context) + len(chunk)
             > MAX_CONTEXT_CHARS
@@ -60,214 +66,110 @@ def generate_response(
 
         combined_context += chunk + "\n\n"
 
-    # Fallback if retrieval empty
     if not combined_context.strip():
         combined_context = (
             "No relevant code context found."
         )
 
-    # ------------------------------
-    # Final Prompt
-    # ------------------------------
+    # --------------------------------------
+    # Prompt
+    # --------------------------------------
+
     prompt = f"""
 You are an expert AI codebase assistant.
 
-Your job:
-- Analyze repository code context
-- Answer accurately and technically
-- Mention relevant files/functions/classes
-- Never hallucinate missing code
-- If information is missing, clearly say so
+Your responsibilities:
+- Analyze repository code
+- Answer technically and accurately
+- Mention relevant functions/classes/files
+- NEVER hallucinate
+- If information is unavailable, clearly say so
 
-==============================
+==================================
 CODE CONTEXT
-==============================
+==================================
 
 {combined_context.strip()}
 
-==============================
+==================================
 QUESTION
-==============================
+==================================
 
 {query}
 
-==============================
+==================================
 ANSWER
-==============================
+==================================
 """
 
-    # ------------------------------
-    # Gemini Endpoint
-    # ------------------------------
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
-        f"models/{MODEL_NAME}:generateContent"
-        f"?key={GEMINI_API_KEY}"
-    )
-
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": prompt
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.2,
-            "topP": 0.8,
-            "topK": 40,
-            "maxOutputTokens": 1024
-        }
-    }
-
-    headers = {
-        "Content-Type": "application/json"
-    }
-
-    # ------------------------------
+    # --------------------------------------
     # Retry loop
-    # ------------------------------
-    retries = 3
+    # --------------------------------------
 
-    for attempt in range(retries):
+    for attempt in range(MAX_RETRIES):
 
         try:
 
-            response = requests.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=REQUEST_TIMEOUT
+            response = model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.2,
+                    "top_p": 0.8,
+                    "top_k": 40,
+                    "max_output_tokens": 1024,
+                }
             )
 
-            # =====================================
-            # SUCCESS
-            # =====================================
-            if response.status_code == 200:
+            # ----------------------------------
+            # Validate response
+            # ----------------------------------
 
-                try:
-                    data = response.json()
-
-                except Exception:
-                    raise Exception(
-                        "Failed to parse Gemini JSON response"
-                    )
-
-                # Debug logs
-                print("========== GEMINI SUCCESS ==========")
-                print(data)
-                print("====================================")
-
-                candidates = data.get("candidates")
-
-                if not candidates:
-                    raise Exception(
-                        f"No candidates returned: {data}"
-                    )
-
-                content = (
-                    candidates[0]
-                    .get("content", {})
-                    .get("parts", [{}])[0]
-                    .get("text")
+            if not response:
+                raise Exception(
+                    "Empty Gemini response object"
                 )
 
-                if not content:
-                    raise Exception(
-                        f"Empty Gemini response: {data}"
-                    )
+            if not hasattr(response, "text"):
+                raise Exception(
+                    f"Gemini response missing text: {response}"
+                )
 
-                return content.strip()
+            answer = response.text.strip()
 
-            # =====================================
-            # RETRYABLE ERRORS
-            # =====================================
-            if response.status_code in [
-                429,
-                500,
-                502,
-                503,
-                504
-            ]:
+            if not answer:
+                raise Exception(
+                    "Gemini returned empty answer"
+                )
 
-                wait_time = (attempt + 1) * 5
+            print("========== GEMINI SUCCESS ==========")
+            print(answer[:500])
+            print("====================================")
+
+            return answer
+
+        except Exception as error:
+
+            print("========== GEMINI ERROR ==========")
+            print(str(error))
+            print("==================================")
+
+            # Retry for transient failures
+            if attempt < MAX_RETRIES - 1:
+
+                wait_time = (attempt + 1) * 3
 
                 print(
-                    f"Gemini temporary error "
-                    f"{response.status_code}. "
                     f"Retrying in {wait_time}s..."
                 )
-
-                print(response.text)
 
                 time.sleep(wait_time)
 
                 continue
 
-            # =====================================
-            # NON-RETRYABLE ERRORS
-            # =====================================
-            print("========== GEMINI ERROR ==========")
-            print("STATUS:", response.status_code)
-            print("RESPONSE:", response.text)
-            print("==================================")
-
             raise Exception(
-                f"Gemini API Error "
-                f"{response.status_code}: "
-                f"{response.text}"
+                f"Gemini generation failed: {error}"
             )
 
-        except requests.exceptions.Timeout:
-
-            print(
-                f"Gemini timeout "
-                f"(attempt {attempt + 1}/{retries})"
-            )
-
-            if attempt == retries - 1:
-                raise Exception(
-                    "Gemini request timed out"
-                )
-
-            time.sleep(3)
-
-        except requests.exceptions.ConnectionError:
-
-            print(
-                f"Gemini connection error "
-                f"(attempt {attempt + 1}/{retries})"
-            )
-
-            if attempt == retries - 1:
-                raise Exception(
-                    "Gemini connection failed"
-                )
-
-            time.sleep(3)
-
-        except requests.exceptions.RequestException as error:
-
-            print("========== NETWORK ERROR ==========")
-            print(str(error))
-            print("===================================")
-
-            raise Exception(
-                f"Network error while calling Gemini API: {error}"
-            )
-
-        except Exception as error:
-
-            print("========== UNKNOWN ERROR ==========")
-            print(str(error))
-            print("===================================")
-
-            raise
-
-    # Final fallback
     raise Exception(
         "Gemini generation failed after retries"
     )
