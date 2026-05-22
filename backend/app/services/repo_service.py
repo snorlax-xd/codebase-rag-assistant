@@ -79,50 +79,46 @@ def split_text(text, max_chars=2000):
 
 
 def index_repository(repo_path: str):
-
     scanned_files = scan_repository(repo_path)
-
     indexed_count = 0
+    skipped_count = 0
 
     for file_data in scanned_files:
-
         parsed_data = file_data.get("parsed", {})
-
         functions = parsed_data.get("functions", [])
         classes = parsed_data.get("classes", [])
-
         chunks = functions + classes
 
         for chunk in chunks:
-
             content = chunk.get("content", "")
-
             if not content.strip():
                 continue
 
             text_chunks = split_text(content)
 
             for text_chunk in text_chunks:
-
-                embedding = generate_embedding(text_chunk)
-
-                payload_data = {
-                    "file_name": file_data["file_name"],
-                    "language": file_data["language"],
-                    "path": file_data["path"],
-                    "content": text_chunk,
-                    "parsed": chunk
-                }
-
-                store_embedding(payload_data, embedding)
-
-                indexed_count += 1
+                try:
+                    embedding = generate_embedding(text_chunk)
+                    payload_data = {
+                        "file_name": file_data["file_name"],
+                        "language": file_data["language"],
+                        "path": file_data["path"],
+                        "content": text_chunk,
+                        "parsed": chunk
+                    }
+                    store_embedding(payload_data, embedding)
+                    indexed_count += 1
+                    print(f"Indexed chunk {indexed_count} from {file_data['file_name']}")
+                except Exception as e:
+                    print(f"Skipping chunk from {file_data['file_name']}: {e}")
+                    skipped_count += 1
+                    continue
 
     return {
         "status": "indexed",
-        "indexed_chunks": indexed_count
+        "indexed_chunks": indexed_count,
+        "skipped_chunks": skipped_count
     }
-
 
 def search_repository(query):
 
