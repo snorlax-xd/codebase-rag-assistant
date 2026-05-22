@@ -60,3 +60,5 @@ tree-sitter-typescript
 tree-sitter-java
 tree-sitter-python
 google-generativeai==0.8.5
+grpcio>=1.62.0
+grpcio-status>=1.62.0

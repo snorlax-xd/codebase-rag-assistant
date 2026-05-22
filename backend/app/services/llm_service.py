@@ -1,11 +1,17 @@
 import os
 import time
 import google.generativeai as genai
+from google.api_core.exceptions import (
+    ResourceExhausted,
+    DeadlineExceeded,
+    ServiceUnavailable,
+    GoogleAPIError,
+)
 
 
-# ==========================================
+# =========================================================
 # CONFIG
-# ==========================================
+# =========================================================
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
@@ -16,35 +22,33 @@ if not GOOGLE_API_KEY:
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# MOST STABLE MODEL
-MODEL_NAME = "gemini-1.5-flash"
 
-# Context safety
+# =========================================================
+# FALLBACK MODEL CHAIN
+# =========================================================
+
+# Railway-safe fallback order
+MODEL_CANDIDATES = [
+    "gemini-1.0-pro",
+    "gemini-pro",
+    "models/gemini-1.0-pro",
+]
+
+# Prompt limits
 MAX_CONTEXT_CHARS = 12000
 
-# Retry config
+# Retry limits
 MAX_RETRIES = 3
 
 
-# ==========================================
-# MODEL INITIALIZATION
-# ==========================================
+# =========================================================
+# BUILD PROMPT
+# =========================================================
 
-model = genai.GenerativeModel(MODEL_NAME)
-
-
-# ==========================================
-# RESPONSE GENERATION
-# ==========================================
-
-def generate_response(
+def build_prompt(
     query: str,
     context_chunks: list[str]
 ) -> str:
-
-    # --------------------------------------
-    # Build context safely
-    # --------------------------------------
 
     combined_context = ""
 
@@ -71,105 +75,173 @@ def generate_response(
             "No relevant code context found."
         )
 
-    # --------------------------------------
-    # Prompt
-    # --------------------------------------
-
     prompt = f"""
 You are an expert AI codebase assistant.
 
-Your responsibilities:
+Your job:
 - Analyze repository code
-- Answer technically and accurately
-- Mention relevant functions/classes/files
+- Answer accurately
+- Mention relevant files/classes/functions
 - NEVER hallucinate
-- If information is unavailable, clearly say so
+- If context is insufficient, clearly say so
 
-==================================
+==================================================
 CODE CONTEXT
-==================================
+==================================================
 
 {combined_context.strip()}
 
-==================================
+==================================================
 QUESTION
-==================================
+==================================================
 
 {query}
 
-==================================
+==================================================
 ANSWER
-==================================
+==================================================
 """
 
-    # --------------------------------------
-    # Retry loop
-    # --------------------------------------
+    return prompt
 
-    for attempt in range(MAX_RETRIES):
 
-        try:
+# =========================================================
+# TRY SINGLE MODEL
+# =========================================================
 
-            response = model.generate_content(
-                prompt,
-                generation_config={
-                    "temperature": 0.2,
-                    "top_p": 0.8,
-                    "top_k": 40,
-                    "max_output_tokens": 1024,
-                }
-            )
+def try_model(model_name: str, prompt: str):
 
-            # ----------------------------------
-            # Validate response
-            # ----------------------------------
+    print(f"Trying Gemini model: {model_name}")
 
-            if not response:
-                raise Exception(
-                    "Empty Gemini response object"
+    model = genai.GenerativeModel(model_name)
+
+    response = model.generate_content(
+        prompt,
+        generation_config={
+            "temperature": 0.2,
+            "top_p": 0.8,
+            "top_k": 40,
+            "max_output_tokens": 1024,
+        }
+    )
+
+    if not response:
+        raise Exception(
+            f"Empty response from {model_name}"
+        )
+
+    if not hasattr(response, "text"):
+        raise Exception(
+            f"No text field in response from {model_name}"
+        )
+
+    text = response.text.strip()
+
+    if not text:
+        raise Exception(
+            f"Empty text returned by {model_name}"
+        )
+
+    return text
+
+
+# =========================================================
+# MAIN RESPONSE FUNCTION
+# =========================================================
+
+def generate_response(
+    query: str,
+    context_chunks: list[str]
+) -> str:
+
+    prompt = build_prompt(
+        query,
+        context_chunks
+    )
+
+    last_error = None
+
+    # -----------------------------------------------------
+    # MODEL FALLBACK LOOP
+    # -----------------------------------------------------
+
+    for model_name in MODEL_CANDIDATES:
+
+        for attempt in range(MAX_RETRIES):
+
+            try:
+
+                answer = try_model(
+                    model_name,
+                    prompt
                 )
 
-            if not hasattr(response, "text"):
-                raise Exception(
-                    f"Gemini response missing text: {response}"
-                )
+                print("========== GEMINI SUCCESS ==========")
+                print(f"MODEL: {model_name}")
+                print(answer[:500])
+                print("====================================")
 
-            answer = response.text.strip()
+                return answer
 
-            if not answer:
-                raise Exception(
-                    "Gemini returned empty answer"
-                )
+            except ResourceExhausted as error:
 
-            print("========== GEMINI SUCCESS ==========")
-            print(answer[:500])
-            print("====================================")
+                last_error = error
 
-            return answer
-
-        except Exception as error:
-
-            print("========== GEMINI ERROR ==========")
-            print(str(error))
-            print("==================================")
-
-            # Retry for transient failures
-            if attempt < MAX_RETRIES - 1:
-
-                wait_time = (attempt + 1) * 3
+                wait_time = (attempt + 1) * 5
 
                 print(
+                    f"Rate limit hit for {model_name}. "
                     f"Retrying in {wait_time}s..."
                 )
 
                 time.sleep(wait_time)
 
-                continue
+            except (
+                DeadlineExceeded,
+                ServiceUnavailable
+            ) as error:
 
-            raise Exception(
-                f"Gemini generation failed: {error}"
-            )
+                last_error = error
+
+                wait_time = (attempt + 1) * 3
+
+                print(
+                    f"Temporary Gemini outage for "
+                    f"{model_name}. "
+                    f"Retrying in {wait_time}s..."
+                )
+
+                time.sleep(wait_time)
+
+            except GoogleAPIError as error:
+
+                last_error = error
+
+                print("========== GOOGLE API ERROR ==========")
+                print(f"MODEL: {model_name}")
+                print(str(error))
+                print("======================================")
+
+                # Move to next model
+                break
+
+            except Exception as error:
+
+                last_error = error
+
+                print("========== GEMINI ERROR ==========")
+                print(f"MODEL: {model_name}")
+                print(str(error))
+                print("==================================")
+
+                # Move to next model
+                break
+
+    # -----------------------------------------------------
+    # TOTAL FAILURE
+    # -----------------------------------------------------
 
     raise Exception(
-        "Gemini generation failed after retries"
+        f"All Gemini models failed. "
+        f"Last error: {last_error}"
     )
