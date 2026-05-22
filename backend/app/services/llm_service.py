@@ -1,17 +1,13 @@
 import os
 import time
-import google.generativeai as genai
-from google.api_core.exceptions import (
-    ResourceExhausted,
-    DeadlineExceeded,
-    ServiceUnavailable,
-    GoogleAPIError,
-)
+
+from google import genai
+from google.genai import types
 
 
-# =========================================================
+# ======================================================
 # CONFIG
-# =========================================================
+# ======================================================
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
@@ -20,30 +16,21 @@ if not GOOGLE_API_KEY:
         "GOOGLE_API_KEY environment variable missing"
     )
 
-genai.configure(api_key=GOOGLE_API_KEY)
+# NEW OFFICIAL CLIENT
+client = genai.Client(
+    api_key=GOOGLE_API_KEY
+)
 
+# Stable modern model
+MODEL_NAME = "gemini-2.5-flash"
 
-# =========================================================
-# FALLBACK MODEL CHAIN
-# =========================================================
-
-# Railway-safe fallback order
-MODEL_CANDIDATES = [
-    "gemini-1.0-pro",
-    "gemini-pro",
-    "models/gemini-1.0-pro",
-]
-
-# Prompt limits
 MAX_CONTEXT_CHARS = 12000
-
-# Retry limits
 MAX_RETRIES = 3
 
 
-# =========================================================
-# BUILD PROMPT
-# =========================================================
+# ======================================================
+# PROMPT BUILDER
+# ======================================================
 
 def build_prompt(
     query: str,
@@ -72,18 +59,18 @@ def build_prompt(
 
     if not combined_context.strip():
         combined_context = (
-            "No relevant code context found."
+            "No relevant repository context found."
         )
 
     prompt = f"""
 You are an expert AI codebase assistant.
 
-Your job:
+Your tasks:
 - Analyze repository code
-- Answer accurately
+- Explain logic clearly
 - Mention relevant files/classes/functions
-- NEVER hallucinate
-- If context is insufficient, clearly say so
+- Never hallucinate
+- If information is missing, say so clearly
 
 ==================================================
 CODE CONTEXT
@@ -105,49 +92,9 @@ ANSWER
     return prompt
 
 
-# =========================================================
-# TRY SINGLE MODEL
-# =========================================================
-
-def try_model(model_name: str, prompt: str):
-
-    print(f"Trying Gemini model: {model_name}")
-
-    model = genai.GenerativeModel(model_name)
-
-    response = model.generate_content(
-        prompt,
-        generation_config={
-            "temperature": 0.2,
-            "top_p": 0.8,
-            "top_k": 40,
-            "max_output_tokens": 1024,
-        }
-    )
-
-    if not response:
-        raise Exception(
-            f"Empty response from {model_name}"
-        )
-
-    if not hasattr(response, "text"):
-        raise Exception(
-            f"No text field in response from {model_name}"
-        )
-
-    text = response.text.strip()
-
-    if not text:
-        raise Exception(
-            f"Empty text returned by {model_name}"
-        )
-
-    return text
-
-
-# =========================================================
-# MAIN RESPONSE FUNCTION
-# =========================================================
+# ======================================================
+# MAIN GENERATION
+# ======================================================
 
 def generate_response(
     query: str,
@@ -161,87 +108,59 @@ def generate_response(
 
     last_error = None
 
-    # -----------------------------------------------------
-    # MODEL FALLBACK LOOP
-    # -----------------------------------------------------
+    for attempt in range(MAX_RETRIES):
 
-    for model_name in MODEL_CANDIDATES:
+        try:
 
-        for attempt in range(MAX_RETRIES):
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    top_p=0.8,
+                    top_k=40,
+                    max_output_tokens=1024,
+                )
+            )
 
-            try:
-
-                answer = try_model(
-                    model_name,
-                    prompt
+            if not response:
+                raise Exception(
+                    "Empty Gemini response"
                 )
 
-                print("========== GEMINI SUCCESS ==========")
-                print(f"MODEL: {model_name}")
-                print(answer[:500])
-                print("====================================")
-
-                return answer
-
-            except ResourceExhausted as error:
-
-                last_error = error
-
-                wait_time = (attempt + 1) * 5
-
-                print(
-                    f"Rate limit hit for {model_name}. "
-                    f"Retrying in {wait_time}s..."
+            if not response.text:
+                raise Exception(
+                    f"Gemini returned empty text: {response}"
                 )
 
-                time.sleep(wait_time)
+            answer = response.text.strip()
 
-            except (
-                DeadlineExceeded,
-                ServiceUnavailable
-            ) as error:
+            print("========== GEMINI SUCCESS ==========")
+            print(answer[:500])
+            print("====================================")
 
-                last_error = error
+            return answer
+
+        except Exception as error:
+
+            last_error = error
+
+            print("========== GEMINI ERROR ==========")
+            print(str(error))
+            print("==================================")
+
+            if attempt < MAX_RETRIES - 1:
 
                 wait_time = (attempt + 1) * 3
 
                 print(
-                    f"Temporary Gemini outage for "
-                    f"{model_name}. "
                     f"Retrying in {wait_time}s..."
                 )
 
                 time.sleep(wait_time)
 
-            except GoogleAPIError as error:
-
-                last_error = error
-
-                print("========== GOOGLE API ERROR ==========")
-                print(f"MODEL: {model_name}")
-                print(str(error))
-                print("======================================")
-
-                # Move to next model
-                break
-
-            except Exception as error:
-
-                last_error = error
-
-                print("========== GEMINI ERROR ==========")
-                print(f"MODEL: {model_name}")
-                print(str(error))
-                print("==================================")
-
-                # Move to next model
-                break
-
-    # -----------------------------------------------------
-    # TOTAL FAILURE
-    # -----------------------------------------------------
+                continue
 
     raise Exception(
-        f"All Gemini models failed. "
-        f"Last error: {last_error}"
+        f"Gemini generation failed: {last_error}"
     )
