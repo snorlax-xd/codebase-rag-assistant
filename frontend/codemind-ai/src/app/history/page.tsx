@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 const HISTORY_KEY = "codemind_chat_history";
+const SESSION_KEY = "codemind_current_session_id";
 
 type ChatSession = {
   id: string;
@@ -35,6 +36,7 @@ function formatTime(ts: number): string {
   const mins = Math.floor(diff / 60000);
   const hours = Math.floor(diff / 3600000);
   const days = Math.floor(diff / 86400000);
+  if (mins < 1) return "Just now";
   if (mins < 60) return `${mins}m ago`;
   if (hours < 24) return `${hours}h ago`;
   if (days === 1) return "Yesterday";
@@ -58,25 +60,35 @@ export default function HistoryPage() {
   };
 
   const openSession = (session: ChatSession) => {
-    localStorage.setItem("codemind_active_session", session.id);
+    // Use the same key that chat/page.tsx reads on mount
+    localStorage.setItem(SESSION_KEY, session.id);
     router.push("/chat");
   };
 
-  const groupedSessions = sessions.reduce<Record<string, ChatSession[]>>((acc, s) => {
-    const diff = Date.now() - s.timestamp;
-    const days = Math.floor(diff / 86400000);
-    const group = days === 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? "This week" : "Older";
-    if (!acc[group]) acc[group] = [];
-    acc[group].push(s);
-    return acc;
-  }, {});
+  const groupedSessions = sessions.reduce<Record<string, ChatSession[]>>(
+    (acc, s) => {
+      const diff = Date.now() - s.timestamp;
+      const days = Math.floor(diff / 86400000);
+      const group =
+        days === 0
+          ? "Today"
+          : days === 1
+            ? "Yesterday"
+            : days < 7
+              ? "This week"
+              : "Older";
+      if (!acc[group]) acc[group] = [];
+      acc[group].push(s);
+      return acc;
+    },
+    {}
+  );
 
   const groupOrder = ["Today", "Yesterday", "This week", "Older"];
 
   return (
     <AppShell title="Session History">
       <div className="mx-auto max-w-3xl space-y-8 p-[var(--container-padding)]">
-
         {sessions.length === 0 ? (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
@@ -111,23 +123,28 @@ export default function HistoryPage() {
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: i * 0.05 }}
                     >
+                      {/* group class added so delete button hover works */}
                       <Card
-                        className="flex cursor-pointer items-center justify-between p-4 transition hover:border-primary/40"
+                        className="group flex cursor-pointer items-center justify-between p-4 transition hover:border-primary/40"
                         onClick={() => openSession(s)}
                       >
-                        <div className="flex items-center gap-4 min-w-0">
+                        <div className="flex min-w-0 items-center gap-4">
                           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-surface-container-high text-primary">
                             <MessageSquare size={18} />
                           </div>
                           <div className="min-w-0">
-                            <p className="truncate font-medium text-on-surface">{s.title}</p>
+                            <p className="truncate font-medium text-on-surface">
+                              {s.title}
+                            </p>
                             <p className="flex items-center gap-2 text-sm text-on-surface-variant">
                               <Clock size={12} />
                               {formatTime(s.timestamp)}
                               {s.repo && (
                                 <>
                                   <span>·</span>
-                                  <span className="truncate font-mono text-xs">{s.repo}</span>
+                                  <span className="truncate font-mono text-xs">
+                                    {s.repo}
+                                  </span>
                                 </>
                               )}
                             </p>
@@ -138,10 +155,12 @@ export default function HistoryPage() {
                             )}
                           </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-2 ml-4">
+
+                        <div className="ml-4 flex shrink-0 items-center gap-2">
                           <span className="font-mono text-xs text-on-surface-variant">
                             {s.messageCount} msgs
                           </span>
+                          {/* opacity-0 + group-hover:opacity-100 now works because Card has group class */}
                           <button
                             type="button"
                             onClick={(e) => deleteSession(s.id, e)}
