@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useEffect, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -34,77 +34,126 @@ function nodeStyle(accent: "primary" | "secondary" | "tertiary", pulse = false) 
   };
 }
 
-const initialNodes: Node[] = [
-  {
-    id: "auth",
-    position: { x: 280, y: 120 },
-    data: { label: "auth-engine.ts" },
-    style: nodeStyle("primary", true),
-  },
-  {
-    id: "db",
-    position: { x: 480, y: 280 },
-    data: { label: "postgres-client.rs" },
-    style: nodeStyle("secondary"),
-  },
-  {
-    id: "parser",
-    position: { x: 120, y: 320 },
-    data: { label: "semantic-parser.py" },
-    style: nodeStyle("primary"),
-  },
-  {
-    id: "legacy",
-    position: { x: 640, y: 180 },
-    data: { label: "legacy-parser.cc" },
-    style: nodeStyle("tertiary", true),
-  },
-  {
-    id: "api",
-    position: { x: 380, y: 420 },
-    data: { label: "api-gateway.ts" },
-    style: nodeStyle("secondary"),
-  },
+const ACCENT_FOR_LANGUAGE: Record<string, "primary" | "secondary" | "tertiary"> = {
+  python: "primary",
+  typescript: "primary",
+  javascript: "primary",
+  java: "secondary",
+  go: "secondary",
+  rust: "secondary",
+  cpp: "tertiary",
+  c: "tertiary",
+};
+
+const FALLBACK_NODES: Node[] = [
+  { id: "auth", position: { x: 280, y: 120 }, data: { label: "auth-engine.ts" }, style: nodeStyle("primary", true) },
+  { id: "db", position: { x: 480, y: 280 }, data: { label: "postgres-client.rs" }, style: nodeStyle("secondary") },
+  { id: "parser", position: { x: 120, y: 320 }, data: { label: "semantic-parser.py" }, style: nodeStyle("primary") },
+  { id: "legacy", position: { x: 640, y: 180 }, data: { label: "legacy-parser.cc" }, style: nodeStyle("tertiary", true) },
+  { id: "api", position: { x: 380, y: 420 }, data: { label: "api-gateway.ts" }, style: nodeStyle("secondary") },
 ];
 
-const initialEdges: Edge[] = [
-  {
-    id: "e1",
-    source: "auth",
-    target: "db",
-    animated: true,
-    style: { stroke: "#c0c1ff", strokeWidth: 2 },
-  },
-  {
-    id: "e2",
-    source: "parser",
-    target: "auth",
-    style: { stroke: "#4edea3", strokeWidth: 1.5, opacity: 0.7 },
-  },
-  {
-    id: "e3",
-    source: "db",
-    target: "api",
-    animated: true,
-    style: { stroke: "#4edea3", strokeWidth: 2 },
-  },
-  {
-    id: "e4",
-    source: "legacy",
-    target: "parser",
-    style: { stroke: "#ffb2b7", strokeWidth: 1.5, opacity: 0.5 },
-  },
+const FALLBACK_EDGES: Edge[] = [
+  { id: "e1", source: "auth", target: "db", animated: true, style: { stroke: "#c0c1ff", strokeWidth: 2 } },
+  { id: "e2", source: "parser", target: "auth", style: { stroke: "#4edea3", strokeWidth: 1.5, opacity: 0.7 } },
+  { id: "e3", source: "db", target: "api", animated: true, style: { stroke: "#4edea3", strokeWidth: 2 } },
+  { id: "e4", source: "legacy", target: "parser", style: { stroke: "#ffb2b7", strokeWidth: 1.5, opacity: 0.5 } },
 ];
+
+function buildGraphFromFiles(files: { file_name: string; path: string; language: string; content: string }[]) {
+  const nodes: Node[] = [];
+  const edges: Edge[] = [];
+  const edgeSet = new Set<string>();
+
+  // Build a map of filename -> id for edge creation
+  const fileMap: Record<string, string> = {};
+  files.forEach((f, i) => {
+    const id = `node_${i}`;
+    fileMap[f.file_name] = id;
+  });
+
+  files.slice(0, 20).forEach((f, i) => {
+    const id = `node_${i}`;
+    const lang = f.language?.toLowerCase() ?? "python";
+    const accent = ACCENT_FOR_LANGUAGE[lang] ?? "primary";
+
+    // Spread nodes in a grid layout
+    const col = i % 5;
+    const row = Math.floor(i / 5);
+
+    nodes.push({
+      id,
+      position: { x: 150 + col * 220, y: 80 + row * 180 },
+      data: { label: f.file_name },
+      style: nodeStyle(accent),
+    });
+
+    // Create edges based on import detection in content
+    if (f.content) {
+      const importRegex = /(?:import|from|require)\s+['".]([^'".\s]+)/g;
+      let match;
+      while ((match = importRegex.exec(f.content)) !== null) {
+        const importedName = match[1].split("/").pop() ?? "";
+        // Find a file that matches this import
+        const targetFile = files.find(
+          (tf) =>
+            tf.file_name.replace(/\.[^.]+$/, "") === importedName ||
+            tf.file_name.startsWith(importedName)
+        );
+        if (targetFile && targetFile.file_name !== f.file_name) {
+          const targetId = fileMap[targetFile.file_name];
+          const edgeKey = `${id}-${targetId}`;
+          if (targetId && !edgeSet.has(edgeKey)) {
+            edgeSet.add(edgeKey);
+            edges.push({
+              id: edgeKey,
+              source: id,
+              target: targetId,
+              animated: false,
+              style: { stroke: "#4edea3", strokeWidth: 1.5, opacity: 0.6 },
+            });
+          }
+        }
+      }
+    }
+  });
+
+  return { nodes, edges };
+}
 
 export default function ArchitectureFlow() {
-  const [nodes, , onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(FALLBACK_NODES);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(FALLBACK_EDGES);
+  const [loading, setLoading] = useState(false);
+  const [repoName, setRepoName] = useState<string | null>(null);
+
+  useEffect(() => {
+    const activeRepo = localStorage.getItem("codemind_active_repo");
+    if (!activeRepo) return;
+    setRepoName(activeRepo);
+
+    const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+    setLoading(true);
+    fetch(`${BASE_URL}/search?query=import&repo_name=${encodeURIComponent(activeRepo)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        const files = data.results ?? [];
+        if (files.length === 0) return;
+        const { nodes: newNodes, edges: newEdges } = buildGraphFromFiles(files);
+        if (newNodes.length > 0) {
+          setNodes(newNodes);
+          setEdges(newEdges);
+        }
+      })
+      .catch(() => {
+        // silently fall back to demo nodes
+      })
+      .finally(() => setLoading(false));
+  }, [setNodes, setEdges]);
 
   const defaultEdgeOptions = useMemo(
-    () => ({
-      style: { strokeWidth: 1.5 },
-      type: "smoothstep" as const,
-    }),
+    () => ({ style: { strokeWidth: 1.5 }, type: "smoothstep" as const }),
     []
   );
 
@@ -112,11 +161,7 @@ export default function ArchitectureFlow() {
     (connection: Connection) =>
       setEdges((eds) =>
         addEdge(
-          {
-            ...connection,
-            animated: true,
-            style: { stroke: "#4edea3", strokeWidth: 2 },
-          },
+          { ...connection, animated: true, style: { stroke: "#4edea3", strokeWidth: 2 } },
           eds
         )
       ),
@@ -125,6 +170,11 @@ export default function ArchitectureFlow() {
 
   return (
     <div className="relative h-full w-full">
+      {loading && (
+        <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-full border border-outline-variant bg-surface-container-low px-4 py-1.5 font-mono text-xs text-on-surface-variant">
+          Loading architecture for {repoName}...
+        </div>
+      )}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_30%_40%,rgba(192,193,255,0.08),transparent_50%),radial-gradient(ellipse_at_70%_60%,rgba(78,222,163,0.06),transparent_50%)]"
@@ -144,9 +194,9 @@ export default function ArchitectureFlow() {
         <Controls />
         <MiniMap
           nodeColor={(n) => {
-            const id = n.id;
-            if (id === "legacy") return "#ffb2b7";
-            if (id === "db" || id === "api") return "#4edea3";
+            const style = n.style as { border?: string } | undefined;
+            if (style?.border?.includes("#ffb2b7")) return "#ffb2b7";
+            if (style?.border?.includes("#4edea3")) return "#4edea3";
             return "#c0c1ff";
           }}
           maskColor="rgba(10, 10, 10, 0.85)"
