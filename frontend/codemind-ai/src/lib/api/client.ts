@@ -12,10 +12,14 @@ function withRepoParam(url: string, repoName?: string | null) {
   return `${url}&repo_name=${encodeURIComponent(repoName)}`;
 }
 
-export async function askQuestion(query: string, repoName?: string | null) {
-  const res = await fetch(
-    withRepoParam(`${BASE_URL}/ask?query=${encodeURIComponent(query)}`, repoName)
-  );
+export async function askQuestion(
+  query: string,
+  repoName?: string | null,
+  signal?: AbortSignal
+) {
+  const res = await fetch(withRepoParam(`${BASE_URL}/ask?query=${encodeURIComponent(query)}`, repoName), {
+    signal,
+  });
   if (!res.ok) throw new Error((await res.json()).detail);
   return res.json();
 }

@@ -5,16 +5,18 @@ import { motion } from "framer-motion";
 import {
   Bell,
   ChevronDown,
+  FileCode2,
   Menu,
   Settings,
   Sparkles,
   Terminal,
   Zap,
 } from "lucide-react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { APP_NAME, DEFAULT_REPO } from "@/lib/constants/navigation";
+import { scanRepo, type ScannedFile } from "@/lib/api/client";
 import { easePremium } from "@/lib/motion/presets";
 import { cn } from "@/lib/utils/cn";
 
@@ -29,6 +31,31 @@ type TopbarProps = {
   onMenuClick?: () => void;
 };
 
+type StoredRepo = {
+  name?: string;
+  url?: string;
+};
+
+const ACTIVE_REPO_KEY = "codemind_active_repo";
+const REPOS_KEY = "codemind_repos";
+
+function loadStoredRepos(): StoredRepo[] {
+  try {
+    const raw = localStorage.getItem(REPOS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((repo: StoredRepo) => typeof repo.name === "string" && repo.name)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function setStoredActiveRepo(repoName: string) {
+  localStorage.setItem(ACTIVE_REPO_KEY, repoName);
+  window.dispatchEvent(new CustomEvent("codemind-active-repo-change", { detail: repoName }));
+}
+
 export default function Topbar({
   title,
   showBrand = false,
@@ -40,12 +67,17 @@ export default function Topbar({
   onMenuClick,
 }: TopbarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [activeRepo, setActiveRepo] = useState(DEFAULT_REPO);
+  const [repoMenuOpen, setRepoMenuOpen] = useState(false);
+  const [repos, setRepos] = useState<StoredRepo[]>([]);
+  const [repoFiles, setRepoFiles] = useState<ScannedFile[]>([]);
 
   useEffect(() => {
     const syncActiveRepo = () => {
-      const stored = localStorage.getItem("codemind_active_repo");
+      const stored = localStorage.getItem(ACTIVE_REPO_KEY);
       setActiveRepo(stored || DEFAULT_REPO);
+      setRepos(loadStoredRepos());
     };
 
     queueMicrotask(syncActiveRepo);
@@ -55,6 +87,98 @@ export default function Topbar({
       window.removeEventListener("codemind-active-repo-change", syncActiveRepo);
     };
   }, [pathname]);
+
+  useEffect(() => {
+    if (!repoMenuOpen || activeRepo === DEFAULT_REPO) return;
+
+    queueMicrotask(async () => {
+      try {
+        const data = await scanRepo(activeRepo);
+        setRepoFiles((data.files ?? []).slice(0, 8));
+      } catch {
+        setRepoFiles([]);
+      }
+    });
+  }, [activeRepo, repoMenuOpen]);
+
+  const handleRepoSelect = (repoName: string) => {
+    setStoredActiveRepo(repoName);
+    setActiveRepo(repoName);
+    setRepoMenuOpen(false);
+    router.push(`/architecture?repo=${encodeURIComponent(repoName)}`);
+  };
+
+  const handleFileSelect = (file: ScannedFile) => {
+    localStorage.setItem("codemind_prefill_query", `Explain ${file.file_name} in ${activeRepo}`);
+    setRepoMenuOpen(false);
+    router.push("/chat");
+  };
+
+  const repoButton = (
+    <div className="relative">
+      <motion.button
+        type="button"
+        whileHover={{ scale: 1.02, boxShadow: "0 0 20px rgba(128,131,255,0.15)" }}
+        onClick={() => setRepoMenuOpen((open) => !open)}
+        className="flex items-center gap-2 rounded-lg border border-outline-variant/80 bg-surface-container-highest/80 px-3 py-1.5 font-code-sm text-sm text-on-surface-variant backdrop-blur-sm transition hover:border-primary/50"
+      >
+        <Terminal size={16} className="text-secondary" />
+        <span className="max-w-40 truncate">{activeRepo}</span>
+        <ChevronDown size={14} className={repoMenuOpen ? "rotate-180 transition" : "transition"} />
+      </motion.button>
+
+      {repoMenuOpen && (
+        <div className="absolute left-0 top-11 z-[60] w-72 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-low shadow-2xl">
+          <div className="border-b border-outline-variant/60 p-2">
+            <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+              Repositories
+            </p>
+            {repos.length === 0 ? (
+              <p className="px-2 py-2 text-xs text-on-surface-variant">No repositories added yet.</p>
+            ) : (
+              repos.map((repo) => (
+                <button
+                  key={repo.name}
+                  type="button"
+                  onClick={() => handleRepoSelect(repo.name!)}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition hover:bg-surface-variant",
+                    repo.name === activeRepo ? "text-primary" : "text-on-surface"
+                  )}
+                >
+                  <Terminal size={14} />
+                  <span className="truncate">{repo.name}</span>
+                </button>
+              ))
+            )}
+          </div>
+
+          <div className="max-h-64 overflow-y-auto p-2">
+            <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+              Files in active repo
+            </p>
+            {repoFiles.length === 0 ? (
+              <p className="px-2 py-2 text-xs text-on-surface-variant">
+                Open after scanning to list files here.
+              </p>
+            ) : (
+              repoFiles.map((file) => (
+                <button
+                  key={file.path}
+                  type="button"
+                  onClick={() => handleFileSelect(file)}
+                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-on-surface-variant transition hover:bg-surface-variant hover:text-on-surface"
+                >
+                  <FileCode2 size={13} />
+                  <span className="truncate">{file.file_name}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <header className="topbar-glass sticky top-0 z-50 flex h-16 shrink-0 items-center justify-between px-[var(--container-padding)]">
@@ -82,25 +206,16 @@ export default function Topbar({
         )}
         {showRepoPills && (
           <div className="ml-4 hidden items-center gap-2 md:flex">
-            <motion.button
-              type="button"
-              whileHover={{ scale: 1.02, boxShadow: "0 0 20px rgba(128,131,255,0.15)" }}
-              className="flex items-center gap-2 rounded-lg border border-outline-variant/80 bg-surface-container-highest/80 px-3 py-1.5 font-code-sm text-sm text-on-surface-variant backdrop-blur-sm transition hover:border-primary/50"
-            >
-              <Terminal size={16} className="text-secondary" />
-              {activeRepo}
-              <ChevronDown size={14} />
-            </motion.button>
+            {repoButton}
           </div>
         )}
         {!showRepoPills && !showBrand && title && (
           <motion.div
             initial={{ opacity: 0, scale: 0.96 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="hidden items-center gap-2 rounded-full border border-outline-variant/70 bg-surface-container-highest/60 px-3 py-1 backdrop-blur-sm md:flex"
+            className="hidden md:flex"
           >
-            <Terminal size={14} className="text-secondary" />
-            <span className="font-label-caps text-on-surface-variant">{activeRepo}</span>
+            {repoButton}
           </motion.div>
         )}
       </div>
@@ -128,24 +243,8 @@ export default function Topbar({
             RUN ANALYSIS
           </Button>
         )}
-        {!showBrand && (
-          <button
-            type="button"
-            className="hidden rounded-lg border border-outline-variant/70 px-3 py-1 font-label-caps text-on-surface-variant transition hover:border-primary/30 hover:bg-surface-variant/40 sm:block"
-          >
-            {activeRepo}
-          </button>
-        )}
         {showBrand && (
-          <button
-            type="button"
-            className={cn(
-              "flex items-center gap-2 rounded-lg border border-outline-variant/70 px-3 py-1.5 font-label-caps text-on-surface-variant transition hover:border-primary/30 hover:bg-surface-variant/40"
-            )}
-          >
-            <Terminal size={16} />
-            {activeRepo}
-          </button>
+          repoButton
         )}
         <motion.button
           type="button"

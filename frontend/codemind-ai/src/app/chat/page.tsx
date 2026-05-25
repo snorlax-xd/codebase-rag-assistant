@@ -39,6 +39,18 @@ type Message = {
 
 const HISTORY_KEY = "codemind_chat_history";
 const SESSION_KEY = "codemind_current_session_id";
+const ACTIVE_REPO_KEY = "codemind_active_repo";
+const ASK_TIMEOUT_MS = 45000;
+
+type ChatSession = {
+  id: string;
+  title: string;
+  repo: string;
+  timestamp: number;
+  messageCount: number;
+  preview: string;
+  messages?: Message[];
+};
 
 function saveSession(sessionId: string, messages: Message[]) {
   try {
@@ -49,14 +61,15 @@ function saveSession(sessionId: string, messages: Message[]) {
     const session = {
       id: sessionId,
       title: userMessages[0].text.slice(0, 60) + (userMessages[0].text.length > 60 ? "..." : ""),
-      repo: localStorage.getItem("codemind_active_repo") || "",
+      repo: localStorage.getItem(ACTIVE_REPO_KEY) || "",
       timestamp: Date.now(),
       messageCount: messages.length,
       preview: aiMessages.at(-1)?.text.slice(0, 100) || "",
+      messages,
     };
 
     const raw = localStorage.getItem(HISTORY_KEY);
-    const history: typeof session[] = raw ? JSON.parse(raw) : [];
+    const history: ChatSession[] = raw ? JSON.parse(raw) : [];
     const idx = history.findIndex((s) => s.id === sessionId);
     if (idx >= 0) {
       history[idx] = session;
@@ -260,11 +273,18 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string>("");
+  const [activeRepo, setActiveRepo] = useState<string>("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<boolean>(false);
 
   // ── On mount: load prefill + active session ──
   useEffect(() => {
+    const syncActiveRepo = () => {
+      setActiveRepo(localStorage.getItem(ACTIVE_REPO_KEY) || "");
+    };
+    queueMicrotask(syncActiveRepo);
+    window.addEventListener("codemind-active-repo-change", syncActiveRepo);
+
     // Load prefill from semantic search "Ask AI" button
     const prefill = localStorage.getItem("codemind_prefill_query");
     if (prefill) {
@@ -277,10 +297,24 @@ export default function ChatPage() {
     if (activeSessionId) {
       try {
         const raw = localStorage.getItem(HISTORY_KEY);
-        const history = raw ? JSON.parse(raw) : [];
-        const session = history.find((s: { id: string }) => s.id === activeSessionId);
-        if (session) {
-          queueMicrotask(() => setSessionId(activeSessionId));
+        const history: ChatSession[] = raw ? JSON.parse(raw) : [];
+        const session = history.find((s) => s.id === activeSessionId);
+        if (session?.messages?.length) {
+          queueMicrotask(() => {
+            setSessionId(activeSessionId);
+            setMessages(session.messages ?? []);
+            if (session.repo) {
+              localStorage.setItem(ACTIVE_REPO_KEY, session.repo);
+              setActiveRepo(session.repo);
+            }
+          });
+          return () => {
+            window.removeEventListener("codemind-active-repo-change", syncActiveRepo);
+            abortRef.current = true;
+          };
+        }
+        if (session?.title) {
+          queueMicrotask(() => setInput(session.title));
         }
       } catch {
         localStorage.removeItem(SESSION_KEY);
@@ -293,6 +327,7 @@ export default function ChatPage() {
     queueMicrotask(() => setSessionId(newId));
 
     return () => {
+      window.removeEventListener("codemind-active-repo-change", syncActiveRepo);
       abortRef.current = true;
     };
   }, []);
@@ -330,9 +365,13 @@ export default function ChatPage() {
 
     setMessages((prev) => [...prev, { role: "user", text: userText }]);
 
+    let timeout: number | undefined;
+
     try {
-      const activeRepo = localStorage.getItem("codemind_active_repo");
-      const data = await askQuestion(userText, activeRepo);
+      const controller = new AbortController();
+      timeout = window.setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+      const repoName = localStorage.getItem(ACTIVE_REPO_KEY);
+      const data = await askQuestion(userText, repoName, controller.signal);
 
       if (abortRef.current) return;
 
@@ -357,17 +396,36 @@ export default function ChatPage() {
       ]);
     } catch (err: unknown) {
       if (abortRef.current) return;
-      const msg = err instanceof Error ? err.message : "Could not reach backend.";
+      const msg =
+        err instanceof DOMException && err.name === "AbortError"
+          ? "The backend took too long to respond. Try a narrower question or re-index the selected repository."
+          : err instanceof Error
+            ? err.message
+            : "Could not reach backend.";
       setMessages((prev) => [
         ...prev,
         { role: "ai", text: `Error: ${msg}` },
       ]);
     } finally {
+      if (timeout) window.clearTimeout(timeout);
       if (!abortRef.current) setIsLoading(false);
     }
   };
 
   const lastAiMessage = messages.filter((m) => m.role === "ai").at(-1);
+  const repoSummary = lastAiMessage
+    ? lastAiMessage.text
+    : activeRepo
+      ? `Ask about ${activeRepo} to generate a repository-specific summary.`
+      : "Select or add a repository to generate a summary.";
+  const techStack = Array.from(
+    new Set(
+      messages
+        .flatMap((message) => message.codeBlocks ?? [])
+        .map((block) => block.language)
+        .filter(Boolean)
+    )
+  );
 
   return (
     <AppShell
@@ -506,10 +564,42 @@ export default function ChatPage() {
         <aside className="hidden w-80 shrink-0 flex-col border-l border-outline-variant/60 bg-surface-container-low/80 backdrop-blur-xl xl:flex">
           <div className="border-b border-outline-variant p-4">
             <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
-              Intelligence Stats
+              Repository Context
             </p>
           </div>
           <div className="flex-1 space-y-4 overflow-y-auto p-4">
+            <Card className="p-3">
+              <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
+                Repository Summary
+              </p>
+              <p className="mt-3 max-h-52 overflow-y-auto text-sm leading-relaxed text-on-surface-variant">
+                {repoSummary}
+              </p>
+            </Card>
+
+            <GlassPanel animate={false}>
+              <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
+                Tech Stack
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {techStack.length > 0 ? (
+                  techStack.map((language) => (
+                    <span
+                      key={language}
+                      className="rounded border border-outline-variant bg-surface-container-high px-2 py-1 font-mono text-xs text-primary"
+                    >
+                      {language}
+                    </span>
+                  ))
+                ) : (
+                  <p className="text-sm text-on-surface-variant">
+                    Tech stack appears after code context is retrieved.
+                  </p>
+                )}
+              </div>
+            </GlassPanel>
+
+            <div className="hidden">
             <Card className="p-3">
               <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
                 Vector Semantic Map
@@ -578,6 +668,7 @@ export default function ChatPage() {
                   : "Ask a question to see AI insights here."}
               </p>
             </Card>
+            </div>
           </div>
         </aside>
       </div>

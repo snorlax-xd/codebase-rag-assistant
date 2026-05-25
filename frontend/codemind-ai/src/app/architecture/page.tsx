@@ -14,28 +14,20 @@ const REPOS_KEY = "codemind_repos";
 
 type StoredRepo = {
   name?: string;
+  url?: string;
 };
 
-function readActiveRepo(): string | null {
-  const active = localStorage.getItem(ACTIVE_REPO_KEY);
-  if (active) return active;
-
+function readStoredRepos(): StoredRepo[] {
   try {
     const raw = localStorage.getItem(REPOS_KEY);
     const repos = raw ? JSON.parse(raw) : [];
-    const firstRepo = Array.isArray(repos)
-      ? repos.find((repo: StoredRepo) => typeof repo.name === "string" && repo.name)
-      : null;
-
-    if (firstRepo?.name) {
-      localStorage.setItem(ACTIVE_REPO_KEY, firstRepo.name);
-      return firstRepo.name;
-    }
+    return Array.isArray(repos)
+      ? repos.filter((repo: StoredRepo) => typeof repo.name === "string" && repo.name)
+      : [];
   } catch {
     localStorage.removeItem(REPOS_KEY);
+    return [];
   }
-
-  return null;
 }
 
 function topDirectory(path: string, fileName: string): string {
@@ -84,34 +76,51 @@ function getArchitectureStats(files: ScannedFile[]) {
 
 export default function ArchitecturePage() {
   const [repoName, setRepoName] = useState<string | null>(null);
+  const [knownRepos, setKnownRepos] = useState<StoredRepo[]>([]);
   const [files, setFiles] = useState<ScannedFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const loadArchitecture = async (activeRepo: string | null) => {
+    setRepoName(activeRepo);
+
+    if (!activeRepo) {
+      setFiles([]);
+      return;
+    }
+
+    localStorage.setItem(ACTIVE_REPO_KEY, activeRepo);
+    window.dispatchEvent(new CustomEvent("codemind-active-repo-change", { detail: activeRepo }));
+    setLoading(true);
+    setError(null);
+
+    try {
+      const data = await scanRepo(activeRepo);
+      setFiles(data.files ?? []);
+      const seenRaw = localStorage.getItem("codemind_architecture_history");
+      const seen = seenRaw ? JSON.parse(seenRaw) : [];
+      const updated = [activeRepo, ...(Array.isArray(seen) ? seen.filter((name) => name !== activeRepo) : [])];
+      localStorage.setItem("codemind_architecture_history", JSON.stringify(updated.slice(0, 12)));
+    } catch (err: unknown) {
+      setFiles([]);
+      setError(err instanceof Error ? err.message : "Could not scan repository.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    queueMicrotask(async () => {
-      const activeRepo = readActiveRepo();
-      setRepoName(activeRepo);
-
-      if (!activeRepo) {
-        setFiles([]);
-        return;
-      }
-
-      setLoading(true);
-      setError(null);
-
-      try {
-        const data = await scanRepo(activeRepo);
-        setFiles(data.files ?? []);
-      } catch (err: unknown) {
-        setFiles([]);
-        setError(err instanceof Error ? err.message : "Could not scan repository.");
-      } finally {
-        setLoading(false);
-      }
+    queueMicrotask(() => {
+      setKnownRepos(readStoredRepos());
+      const requestedRepo = new URLSearchParams(window.location.search).get("repo");
+      loadArchitecture(requestedRepo);
     });
   }, []);
+
+  const openRepoArchitecture = (repo: string) => {
+    window.history.pushState(null, "", `/architecture?repo=${encodeURIComponent(repo)}`);
+    loadArchitecture(repo);
+  };
 
   const stats = useMemo(() => getArchitectureStats(files), [files]);
 
@@ -119,6 +128,43 @@ export default function ArchitecturePage() {
     <AppShell title="Architecture Graph" showRunAnalysis fullBleed>
       <div className="relative flex min-h-0 flex-1 grid-bg">
         <ArchitectureFlow files={files} repoName={repoName} loading={loading} error={error} />
+
+        {!repoName && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center p-8">
+            <GlassPanel className="w-full max-w-2xl">
+              <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
+                Select Repository Architecture
+              </p>
+              <h2 className="mt-3 text-2xl font-semibold text-on-surface">
+                Choose a repository to map
+              </h2>
+              <p className="mt-2 text-sm text-on-surface-variant">
+                Open Architecture from a repository card to jump straight into that repo,
+                or choose one here when entering from the sidebar.
+              </p>
+              <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                {knownRepos.map((repo) => (
+                  <button
+                    key={repo.name}
+                    type="button"
+                    onClick={() => openRepoArchitecture(repo.name!)}
+                    className="rounded-lg border border-outline-variant bg-surface-container-high p-4 text-left transition hover:border-primary hover:text-primary"
+                  >
+                    <span className="block font-semibold text-on-surface">{repo.name}</span>
+                    {repo.url && (
+                      <span className="mt-1 block truncate text-xs text-on-surface-variant">{repo.url}</span>
+                    )}
+                  </button>
+                ))}
+                {knownRepos.length === 0 && (
+                  <p className="text-sm text-on-surface-variant">
+                    No repositories found yet. Add one from the Repositories tab.
+                  </p>
+                )}
+              </div>
+            </GlassPanel>
+          </div>
+        )}
 
         <div className="pointer-events-none absolute inset-0 z-10">
           <div className="pointer-events-auto absolute left-6 top-6 space-y-2">

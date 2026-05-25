@@ -1,4 +1,6 @@
 from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import HTTPException
+from pathlib import Path
 import asyncio
 
 from app.services.repo_service import (
@@ -25,6 +27,11 @@ def clone_repo(repo_url: str = Query(..., min_length=1, max_length=2000)):
 @router.get("/scan-repo")
 def scan_repo(repo_name: str = Query(..., min_length=1, max_length=200)):
     repo_path = f"repositories/{repo_name}"
+    if not Path(repo_path).exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Repository is not cloned on the backend. Add or re-index it first."
+        )
     scanned_files = scan_repository(repo_path)
     return {
         "repository": repo_name,

@@ -312,7 +312,7 @@ export default function RepositoriesPage() {
 
   const openArchitecture = (repo: Repo) => {
     setActiveRepo(repo.name);
-    router.push("/architecture");
+    router.push(`/architecture?repo=${encodeURIComponent(repo.name)}`);
   };
 
   return (

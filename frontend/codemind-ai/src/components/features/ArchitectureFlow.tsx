@@ -19,8 +19,8 @@ type ArchitectureFlowProps = {
   error?: string | null;
 };
 
-const MAX_FILES = 40;
-const MAX_DIRECTORIES = 10;
+const MAX_FILES = 120;
+const MAX_DIRECTORIES = 24;
 
 function nodeStyle(accent: "primary" | "secondary" | "tertiary", directory = false) {
   const colors = {

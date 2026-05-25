@@ -8,15 +8,34 @@ IGNORE_DIRECTORIES = {
     "venv"
 }
 
+MAX_TEXT_FILE_BYTES = 250_000
+
 SUPPORTED_EXTENSIONS = {
     ".py": "Python",
     ".js": "JavaScript",
+    ".jsx": "JavaScript",
+    ".mjs": "JavaScript",
+    ".cjs": "JavaScript",
     ".ts": "TypeScript",
+    ".tsx": "TypeScript",
     ".java": "Java",
     ".cpp": "C++",
     ".c": "C",
+    ".h": "C/C++ Header",
+    ".hpp": "C++ Header",
     ".go": "Go",
-    ".rs": "Rust"
+    ".rs": "Rust",
+    ".html": "HTML",
+    ".css": "CSS",
+    ".scss": "SCSS",
+    ".json": "JSON",
+    ".md": "Markdown",
+    ".yml": "YAML",
+    ".yaml": "YAML",
+    ".toml": "TOML",
+    ".xml": "XML",
+    ".gradle": "Gradle",
+    ".kt": "Kotlin"
 }
 
 
@@ -46,6 +65,14 @@ def scan_repository(repo_path: str):
                 }
 
                 try:
+                    if os.path.getsize(full_path) > MAX_TEXT_FILE_BYTES:
+                        file_data["parsed"] = {
+                            "functions": [],
+                            "classes": []
+                        }
+                        scanned_files.append(file_data)
+                        continue
+
                     with open(full_path, "r", encoding="utf-8") as source_file:
                         source_code = source_file.read()
                     file_data["content"] = source_code
