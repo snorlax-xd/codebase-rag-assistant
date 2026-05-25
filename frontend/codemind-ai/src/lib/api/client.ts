@@ -1,16 +1,28 @@
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-export async function askQuestion(query: string) {
+export type ScannedFile = {
+  file_name: string;
+  language: string;
+  path: string;
+  content?: string;
+};
+
+function withRepoParam(url: string, repoName?: string | null) {
+  if (!repoName) return url;
+  return `${url}&repo_name=${encodeURIComponent(repoName)}`;
+}
+
+export async function askQuestion(query: string, repoName?: string | null) {
   const res = await fetch(
-    `${BASE_URL}/ask?query=${encodeURIComponent(query)}`
+    withRepoParam(`${BASE_URL}/ask?query=${encodeURIComponent(query)}`, repoName)
   );
   if (!res.ok) throw new Error((await res.json()).detail);
   return res.json();
 }
 
-export async function searchCode(query: string) {
+export async function searchCode(query: string, repoName?: string | null) {
   const res = await fetch(
-    `${BASE_URL}/search?query=${encodeURIComponent(query)}`
+    withRepoParam(`${BASE_URL}/search?query=${encodeURIComponent(query)}`, repoName)
   );
   if (!res.ok) throw new Error((await res.json()).detail);
   return res.json();
@@ -32,6 +44,18 @@ export async function indexRepo(repoName: string) {
   );
   if (!res.ok) throw new Error((await res.json()).detail);
   return res.json();
+}
+
+export async function scanRepo(repoName: string) {
+  const res = await fetch(
+    `${BASE_URL}/scan-repo?repo_name=${encodeURIComponent(repoName)}`
+  );
+  if (!res.ok) throw new Error((await res.json()).detail);
+  return res.json() as Promise<{
+    repository: string;
+    total_files: number;
+    files: ScannedFile[];
+  }>;
 }
 
 export async function createCollection() {

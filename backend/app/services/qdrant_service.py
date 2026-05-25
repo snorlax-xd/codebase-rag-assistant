@@ -1,5 +1,5 @@
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
+from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, VectorParams
 from qdrant_client.models import PointStruct
 import uuid
 import os
@@ -46,6 +46,7 @@ def store_embedding(file_data, embedding):
 
                     "file_name": file_data["file_name"],
                     "language": file_data["language"],
+                    "repo_name": file_data.get("repo_name"),
                     "path": file_data["path"],
 
                     "content": file_data.get("content", ""),
@@ -61,10 +62,22 @@ def store_embedding(file_data, embedding):
     }
 
 
-def search_similar_chunks(query_embedding):
+def search_similar_chunks(query_embedding, repo_name=None):
+    query_filter = None
+    if repo_name:
+        query_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="repo_name",
+                    match=MatchValue(value=repo_name)
+                )
+            ]
+        )
+
     search_results = client.query_points(
         collection_name=COLLECTION_NAME,
         query=query_embedding,
+        query_filter=query_filter,
         limit=5
     )
     return search_results.points

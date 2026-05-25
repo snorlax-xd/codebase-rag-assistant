@@ -105,6 +105,7 @@ def split_text(text, max_chars=2000):
 
 def index_repository(repo_path: str):
 
+    repo_name = os.path.basename(os.path.normpath(repo_path))
     scanned_files = scan_repository(repo_path)
 
     indexed_count = 0
@@ -137,6 +138,7 @@ def index_repository(repo_path: str):
                     payload_data = {
                         "file_name": file_data["file_name"],
                         "language": file_data["language"],
+                        "repo_name": repo_name,
                         "path": file_data["path"],
                         "content": text_chunk,
                         "parsed": chunk
@@ -168,11 +170,11 @@ def index_repository(repo_path: str):
     }
 
 
-def search_repository(query):
+def search_repository(query, repo_name=None):
 
     query_embedding = generate_embedding(query)
 
-    results = search_similar_chunks(query_embedding)
+    results = search_similar_chunks(query_embedding, repo_name=repo_name)
 
     formatted_results = []
 
@@ -183,6 +185,8 @@ def search_repository(query):
         formatted_results.append({
             "score": result.score,
             "file_name": payload.get("file_name"),
+            "language": payload.get("language"),
+            "repo_name": payload.get("repo_name"),
             "path": payload.get("path"),
             "content": payload.get("content", "")[:1000]
         })

@@ -14,6 +14,7 @@ import {
   Terminal,
   X,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import AppShell from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
@@ -67,6 +68,7 @@ function getRepoNameFromUrl(url: string): string | null {
 function setActiveRepo(repoName: string) {
   try {
     localStorage.setItem(ACTIVE_REPO_KEY, repoName);
+    window.dispatchEvent(new CustomEvent("codemind-active-repo-change", { detail: repoName }));
   } catch {}
 }
 
@@ -114,6 +116,7 @@ function isValidGitUrl(url: string): boolean {
 }
 
 export default function RepositoriesPage() {
+  const router = useRouter();
   const [repos, setRepos] = useState<Repo[]>(loadRepos);
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
@@ -307,6 +310,11 @@ export default function RepositoriesPage() {
     }
   };
 
+  const openArchitecture = (repo: Repo) => {
+    setActiveRepo(repo.name);
+    router.push("/architecture");
+  };
+
   return (
     <AppShell title="CodeMind AI" showBrand>
       <div className="relative mx-auto max-w-[var(--max-width-content,1200px)] space-y-8 p-[var(--container-padding)] pb-32">
@@ -356,9 +364,10 @@ export default function RepositoriesPage() {
               transition={{ delay: index * 0.06 }}
             >
               <Card
+                onClick={() => openArchitecture(repo)}
                 className={`flex flex-col gap-4 p-6 transition hover:border-primary/40 ${
                   repo.status === "error" ? "border-l-2 border-l-tertiary" : ""
-                }`}
+                } cursor-pointer`}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-4">
@@ -423,7 +432,10 @@ export default function RepositoriesPage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleReIndex(repo)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleReIndex(repo);
+                    }}
                     disabled={reIndexing === repo.name || repo.status === "indexing"}
                   >
                     {reIndexing === repo.name ? (

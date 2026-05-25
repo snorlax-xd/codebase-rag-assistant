@@ -331,7 +331,8 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, { role: "user", text: userText }]);
 
     try {
-      const data = await askQuestion(userText);
+      const activeRepo = localStorage.getItem("codemind_active_repo");
+      const data = await askQuestion(userText, activeRepo);
 
       if (abortRef.current) return;
 

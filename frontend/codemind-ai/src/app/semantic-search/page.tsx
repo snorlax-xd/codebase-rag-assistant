@@ -37,7 +37,8 @@ export default function SemanticSearchPage() {
     setError(null);
     setSearched(false);
     try {
-      const data = await searchCode(q.trim());
+      const activeRepo = localStorage.getItem("codemind_active_repo");
+      const data = await searchCode(q.trim(), activeRepo);
       setResults(data.results ?? []);
       setSearched(true);
     } catch (err: unknown) {
@@ -70,7 +71,12 @@ export default function SemanticSearchPage() {
   return (
     <AppShell title="CodeMind AI" showBrand fullBleed>
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <FileExplorer />
+        <FileExplorer
+          onSelect={(file) => {
+            setQuery(file);
+            runSearch(file);
+          }}
+        />
 
         <section className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-background p-[var(--container-padding)]">
           <div className="mx-auto w-full max-w-4xl space-y-6">

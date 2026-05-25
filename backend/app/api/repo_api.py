@@ -53,17 +53,21 @@ async def index_repo(
 
 
 @router.get("/search")
-def search_code(query: str = Query(..., min_length=1, max_length=2000)):
-    results = search_repository(query)
+def search_code(
+    query: str = Query(..., min_length=1, max_length=2000),
+    repo_name: str | None = Query(None, min_length=1, max_length=200)
+):
+    results = search_repository(query, repo_name=repo_name)
     return {
         "query": query,
+        "repo_name": repo_name,
         "results": results
     }
 
 
-def _ask_sync(query: str):
+def _ask_sync(query: str, repo_name: str | None = None):
     query_embedding = generate_embedding(query)
-    search_results = search_similar_chunks(query_embedding)
+    search_results = search_similar_chunks(query_embedding, repo_name=repo_name)
 
     context_chunks = []
     formatted_results = []
@@ -75,22 +79,29 @@ def _ask_sync(query: str):
         formatted_results.append({
             "score": result.score,
             "file_name": payload.get("file_name"),
-            "path": payload.get("path")
+            "language": payload.get("language"),
+            "repo_name": payload.get("repo_name"),
+            "path": payload.get("path"),
+            "content": content
         })
 
     final_answer = generate_response(query, context_chunks)
 
     return {
         "query": query,
+        "repo_name": repo_name,
         "answer": final_answer,
         "sources": formatted_results
     }
 
 
 @router.get("/ask")
-async def ask_question(query: str = Query(..., min_length=1, max_length=2000)):
+async def ask_question(
+    query: str = Query(..., min_length=1, max_length=2000),
+    repo_name: str | None = Query(None, min_length=1, max_length=200)
+):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(executor, _ask_sync, query)
+    result = await loop.run_in_executor(executor, _ask_sync, query, repo_name)
     return result
 
 

@@ -1,16 +1,17 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Bell,
   ChevronDown,
-  GitBranch,
   Menu,
   Settings,
   Sparkles,
   Terminal,
   Zap,
 } from "lucide-react";
+import { usePathname } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { APP_NAME, DEFAULT_REPO } from "@/lib/constants/navigation";
@@ -38,6 +39,23 @@ export default function Topbar({
   actions,
   onMenuClick,
 }: TopbarProps) {
+  const pathname = usePathname();
+  const [activeRepo, setActiveRepo] = useState(DEFAULT_REPO);
+
+  useEffect(() => {
+    const syncActiveRepo = () => {
+      const stored = localStorage.getItem("codemind_active_repo");
+      setActiveRepo(stored || DEFAULT_REPO);
+    };
+
+    queueMicrotask(syncActiveRepo);
+    window.addEventListener("codemind-active-repo-change", syncActiveRepo);
+
+    return () => {
+      window.removeEventListener("codemind-active-repo-change", syncActiveRepo);
+    };
+  }, [pathname]);
+
   return (
     <header className="topbar-glass sticky top-0 z-50 flex h-16 shrink-0 items-center justify-between px-[var(--container-padding)]">
       <div className="flex items-center gap-4">
@@ -70,16 +88,8 @@ export default function Topbar({
               className="flex items-center gap-2 rounded-lg border border-outline-variant/80 bg-surface-container-highest/80 px-3 py-1.5 font-code-sm text-sm text-on-surface-variant backdrop-blur-sm transition hover:border-primary/50"
             >
               <Terminal size={16} className="text-secondary" />
-              {DEFAULT_REPO}
+              {activeRepo}
               <ChevronDown size={14} />
-            </motion.button>
-            <motion.button
-              type="button"
-              whileHover={{ scale: 1.02 }}
-              className="flex items-center gap-2 rounded-lg border border-outline-variant/60 bg-surface-container-highest/40 px-3 py-1.5 font-code-sm text-sm text-on-surface-variant backdrop-blur-sm transition hover:border-primary/40"
-            >
-              <GitBranch size={16} />
-              v2-api-service
             </motion.button>
           </div>
         )}
@@ -90,7 +100,7 @@ export default function Topbar({
             className="hidden items-center gap-2 rounded-full border border-outline-variant/70 bg-surface-container-highest/60 px-3 py-1 backdrop-blur-sm md:flex"
           >
             <Terminal size={14} className="text-secondary" />
-            <span className="font-label-caps text-on-surface-variant">{DEFAULT_REPO}</span>
+            <span className="font-label-caps text-on-surface-variant">{activeRepo}</span>
           </motion.div>
         )}
       </div>
@@ -123,7 +133,7 @@ export default function Topbar({
             type="button"
             className="hidden rounded-lg border border-outline-variant/70 px-3 py-1 font-label-caps text-on-surface-variant transition hover:border-primary/30 hover:bg-surface-variant/40 sm:block"
           >
-            {DEFAULT_REPO}
+            {activeRepo}
           </button>
         )}
         {showBrand && (
@@ -134,7 +144,7 @@ export default function Topbar({
             )}
           >
             <Terminal size={16} />
-            {DEFAULT_REPO}
+            {activeRepo}
           </button>
         )}
         <motion.button
