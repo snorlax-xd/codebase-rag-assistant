@@ -4,7 +4,6 @@ import {
   FolderOpen,
   History,
   Network,
-  Search,
   Settings,
 } from "lucide-react";
 

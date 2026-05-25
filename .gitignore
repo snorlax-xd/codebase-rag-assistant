@@ -10,8 +10,9 @@ node_modules/
 # Logs
 *.log
 
-# Repositories
-repositories/
+# Runtime-cloned repositories
+/repositories/
+backend/repositories/
 
 # Environment
 .env

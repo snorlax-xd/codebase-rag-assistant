@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
   ChevronDown,
@@ -8,6 +8,7 @@ import {
   FileCode2,
   Folder,
   MoreVertical,
+  RefreshCw,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils/cn";
@@ -16,39 +17,59 @@ type FileNode = {
   name: string;
   type: "folder" | "file";
   children?: FileNode[];
-  active?: boolean;
+  language?: string;
 };
-
-const TREE: FileNode[] = [
-  {
-    name: "src",
-    type: "folder",
-    children: [
-      {
-        name: "components",
-        type: "folder",
-        children: [
-          { name: "SearchService.ts", type: "file", active: true },
-          { name: "FileTree.tsx", type: "file" },
-        ],
-      },
-      {
-        name: "lib",
-        type: "folder",
-        children: [
-          { name: "embeddings", type: "folder", children: [{ name: "Engine.ts", type: "file" }] },
-        ],
-      },
-    ],
-  },
-  { name: "package.json", type: "file" },
-  { name: "README.md", type: "file" },
-];
 
 type FileExplorerProps = {
-  onSelect?: (file: string) => void;
+  onSelect?: (file: string, path: string) => void;
   className?: string;
 };
+
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+// Convert flat file list from backend into a nested tree
+function buildTree(files: { file_name: string; path: string; language: string }[]): FileNode[] {
+  const root: FileNode[] = [];
+  const dirMap: Record<string, FileNode> = {};
+
+  files.forEach((f) => {
+    // Normalize path separators
+    const fullPath = f.path.replace(/\\/g, "/");
+    const parts = fullPath.split("/").filter(Boolean);
+
+    // Find the index where the repo name starts
+    const repoIdx = parts.findIndex((p) => p === "repositories");
+    const relevantParts = repoIdx >= 0 ? parts.slice(repoIdx + 2) : parts;
+
+    if (relevantParts.length === 0) return;
+
+    let currentLevel = root;
+    let currentPath = "";
+
+    relevantParts.forEach((part, i) => {
+      currentPath += "/" + part;
+      const isFile = i === relevantParts.length - 1;
+
+      if (isFile) {
+        currentLevel.push({
+          name: f.file_name,
+          type: "file",
+          language: f.language,
+        });
+      } else {
+        let dir = dirMap[currentPath];
+        if (!dir) {
+          dir = { name: part, type: "folder", children: [] };
+          dirMap[currentPath] = dir;
+          currentLevel.push(dir);
+        }
+        currentLevel = dir.children!;
+      }
+    });
+  });
+
+  return root;
+}
 
 function TreeNode({
   node,
@@ -57,25 +78,25 @@ function TreeNode({
 }: {
   node: FileNode;
   depth?: number;
-  onSelect?: (file: string) => void;
+  onSelect?: (file: string, path: string) => void;
 }) {
-  const [open, setOpen] = useState(depth < 2);
+  const [open, setOpen] = useState(depth < 1);
 
   if (node.type === "file") {
     return (
       <button
         type="button"
-        onClick={() => onSelect?.(node.name)}
-        className={cn(
-          "flex w-full items-center gap-2 rounded px-2 py-1.5 font-code-sm text-left transition",
-          node.active
-            ? "bg-surface-variant text-primary"
-            : "text-on-surface hover:bg-surface-variant"
-        )}
+        onClick={() => onSelect?.(node.name, node.name)}
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition hover:bg-surface-variant text-on-surface"
         style={{ paddingLeft: `${depth * 12 + 8}px` }}
       >
-        <FileCode2 size={14} className={node.active ? "text-primary" : "text-on-surface-variant"} />
-        {node.name}
+        <FileCode2 size={14} className="shrink-0 text-on-surface-variant" />
+        <span className="truncate font-mono text-xs">{node.name}</span>
+        {node.language && (
+          <span className="ml-auto shrink-0 text-[10px] text-on-surface-variant">
+            {node.language.slice(0, 2).toUpperCase()}
+          </span>
+        )}
       </button>
     );
   }
@@ -85,20 +106,20 @@ function TreeNode({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2 rounded px-2 py-1.5 font-code-sm text-on-surface hover:bg-surface-variant"
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-on-surface hover:bg-surface-variant"
         style={{ paddingLeft: `${depth * 12 + 8}px` }}
       >
         {open ? (
-          <ChevronDown size={14} className="text-primary" />
+          <ChevronDown size={14} className="shrink-0 text-primary" />
         ) : (
-          <ChevronRight size={14} className="text-on-surface-variant" />
+          <ChevronRight size={14} className="shrink-0 text-on-surface-variant" />
         )}
-        <Folder size={14} className="text-secondary" />
-        {node.name}
+        <Folder size={14} className="shrink-0 text-secondary" />
+        <span className="truncate font-mono text-xs">{node.name}</span>
       </button>
       {open &&
-        node.children?.map((child) => (
-          <TreeNode key={child.name} node={child} depth={depth + 1} onSelect={onSelect} />
+        node.children?.map((child, i) => (
+          <TreeNode key={`${child.name}-${i}`} node={child} depth={depth + 1} onSelect={onSelect} />
         ))}
     </div>
   );
@@ -106,10 +127,37 @@ function TreeNode({
 
 export default function FileExplorer({ onSelect, className }: FileExplorerProps) {
   const [panelOpen, setPanelOpen] = useState(false);
+  const [tree, setTree] = useState<FileNode[]>([]);
+  const [repoName] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : localStorage.getItem("codemind_active_repo")
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+
+  const fetchTree = async (name: string) => {
+    setLoading(true);
+    setError(false);
+    try {
+      const res = await fetch(`${BASE_URL}/scan-repo?repo_name=${encodeURIComponent(name)}`);
+      if (!res.ok) throw new Error("Failed");
+      const data = await res.json();
+      const files = data.files ?? [];
+      if (files.length > 0) {
+        setTree(buildTree(files));
+      }
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (repoName) queueMicrotask(() => fetchTree(repoName));
+  }, [repoName]);
 
   return (
     <>
-      {/* Mobile toggle button — only visible below lg */}
       <button
         type="button"
         onClick={() => setPanelOpen((o) => !o)}
@@ -127,30 +175,69 @@ export default function FileExplorer({ onSelect, className }: FileExplorerProps)
           className
         )}
       >
-        <div className="flex items-center justify-between border-b border-outline-variant p-4">
-          <h2 className="font-label-caps text-on-surface-variant">Explorer</h2>
-          <button
-            type="button"
-            onClick={() => setPanelOpen(false)}
-            className="text-on-surface-variant hover:text-primary lg:hidden"
-          >
-            <ChevronDown size={16} />
-          </button>
-          <button
-            type="button"
-            className="hidden text-on-surface-variant hover:text-primary lg:block"
-          >
-            <MoreVertical size={16} />
-          </button>
+        <div className="flex items-center justify-between border-b border-outline-variant p-3">
+          <div className="min-w-0">
+            <h2 className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
+              Explorer
+            </h2>
+            {repoName && (
+              <p className="truncate font-mono text-xs text-primary mt-0.5">{repoName}</p>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            {repoName && (
+              <button
+                type="button"
+                onClick={() => fetchTree(repoName)}
+                disabled={loading}
+                className="rounded p-1.5 text-on-surface-variant hover:text-primary transition"
+                aria-label="Refresh"
+              >
+                <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setPanelOpen(false)}
+              className="rounded p-1.5 text-on-surface-variant hover:text-primary lg:hidden"
+            >
+              <ChevronDown size={14} />
+            </button>
+            <button
+              type="button"
+              className="hidden rounded p-1.5 text-on-surface-variant hover:text-primary lg:block"
+            >
+              <MoreVertical size={14} />
+            </button>
+          </div>
         </div>
+
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="flex-1 space-y-0.5 overflow-y-auto p-2"
         >
-          {TREE.map((node) => (
-            <TreeNode key={node.name} node={node} onSelect={onSelect} />
-          ))}
+          {loading && (
+            <p className="px-2 py-4 text-center text-xs text-on-surface-variant">
+              Loading file tree...
+            </p>
+          )}
+          {error && (
+            <p className="px-2 py-4 text-center text-xs text-tertiary">
+              Could not load files. Make sure a repo is indexed.
+            </p>
+          )}
+          {!loading && !error && tree.length === 0 && (
+            <p className="px-2 py-4 text-center text-xs text-on-surface-variant">
+              {repoName
+                ? "No files found. Try re-indexing."
+                : "No active repository. Add one in Repositories."}
+            </p>
+          )}
+          {!loading &&
+            tree.map((node, i) => (
+              <TreeNode key={`${node.name}-${i}`} node={node} onSelect={onSelect} />
+            ))}
         </motion.div>
       </section>
     </>

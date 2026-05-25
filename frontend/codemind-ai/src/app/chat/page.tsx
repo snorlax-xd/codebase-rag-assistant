@@ -268,8 +268,8 @@ export default function ChatPage() {
     // Load prefill from semantic search "Ask AI" button
     const prefill = localStorage.getItem("codemind_prefill_query");
     if (prefill) {
-      setInput(prefill);
       localStorage.removeItem("codemind_prefill_query");
+      queueMicrotask(() => setInput(prefill));
     }
 
     // Load active session if navigated from history
@@ -280,15 +280,17 @@ export default function ChatPage() {
         const history = raw ? JSON.parse(raw) : [];
         const session = history.find((s: { id: string }) => s.id === activeSessionId);
         if (session) {
-          setSessionId(activeSessionId);
+          queueMicrotask(() => setSessionId(activeSessionId));
         }
-      } catch {}
+      } catch {
+        localStorage.removeItem(SESSION_KEY);
+      }
     }
 
     // Generate new session ID for this conversation
     const newId = generateSessionId();
-    setSessionId(newId);
     localStorage.setItem(SESSION_KEY, newId);
+    queueMicrotask(() => setSessionId(newId));
 
     return () => {
       abortRef.current = true;

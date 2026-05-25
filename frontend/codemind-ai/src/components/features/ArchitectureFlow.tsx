@@ -125,32 +125,34 @@ export default function ArchitectureFlow() {
   const [nodes, setNodes, onNodesChange] = useNodesState(FALLBACK_NODES);
   const [edges, setEdges, onEdgesChange] = useEdgesState(FALLBACK_EDGES);
   const [loading, setLoading] = useState(false);
-  const [repoName, setRepoName] = useState<string | null>(null);
+  const [repoName] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : localStorage.getItem("codemind_active_repo")
+  );
 
   useEffect(() => {
-    const activeRepo = localStorage.getItem("codemind_active_repo");
-    if (!activeRepo) return;
-    setRepoName(activeRepo);
+    if (!repoName) return;
 
     const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-    setLoading(true);
-    fetch(`${BASE_URL}/search?query=import&repo_name=${encodeURIComponent(activeRepo)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        const files = data.results ?? [];
-        if (files.length === 0) return;
-        const { nodes: newNodes, edges: newEdges } = buildGraphFromFiles(files);
-        if (newNodes.length > 0) {
-          setNodes(newNodes);
-          setEdges(newEdges);
-        }
-      })
-      .catch(() => {
-        // silently fall back to demo nodes
-      })
-      .finally(() => setLoading(false));
-  }, [setNodes, setEdges]);
+    queueMicrotask(() => {
+      setLoading(true);
+      fetch(`${BASE_URL}/search?query=import&repo_name=${encodeURIComponent(repoName)}`)
+        .then((r) => r.json())
+        .then((data) => {
+          const files = data.results ?? [];
+          if (files.length === 0) return;
+          const { nodes: newNodes, edges: newEdges } = buildGraphFromFiles(files);
+          if (newNodes.length > 0) {
+            setNodes(newNodes);
+            setEdges(newEdges);
+          }
+        })
+        .catch(() => {
+          // silently fall back to demo nodes
+        })
+        .finally(() => setLoading(false));
+    });
+  }, [repoName, setNodes, setEdges]);
 
   const defaultEdgeOptions = useMemo(
     () => ({ style: { strokeWidth: 1.5 }, type: "smoothstep" as const }),
