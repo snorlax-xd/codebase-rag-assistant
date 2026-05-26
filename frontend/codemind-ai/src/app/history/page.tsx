@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
-import { ChevronRight, Clock, MessageSquare, Trash2 } from "lucide-react";
+import { ChevronRight, Clock, MessageSquare, Trash2, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import AppShell from "@/components/layout/AppShell";
@@ -23,9 +23,7 @@ type ChatSession = {
 
 function isChatSession(value: unknown): value is ChatSession {
   if (!value || typeof value !== "object") return false;
-
   const session = value as Partial<ChatSession>;
-
   return (
     typeof session.id === "string" &&
     typeof session.title === "string" &&
@@ -35,24 +33,24 @@ function isChatSession(value: unknown): value is ChatSession {
 
 function loadHistory(): ChatSession[] {
   if (typeof window === "undefined") return [];
-
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
     if (!raw) return [];
-
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-
-    return parsed.filter(isChatSession).map((session) => ({
-      id: session.id,
-      title: session.title || "Untitled session",
-      repo: session.repo || "",
-      timestamp: session.timestamp,
-      messageCount: Number.isFinite(session.messageCount)
-        ? session.messageCount
-        : 0,
-      preview: session.preview || "",
-    }));
+    return parsed
+      .filter(isChatSession)
+      .map((session) => ({
+        id: session.id,
+        title: session.title || "Untitled session",
+        repo: session.repo || "",
+        timestamp: session.timestamp,
+        messageCount: Number.isFinite(session.messageCount)
+          ? session.messageCount
+          : 0,
+        preview: session.preview || "",
+      }))
+      .sort((a, b) => b.timestamp - a.timestamp);
   } catch {
     localStorage.removeItem(HISTORY_KEY);
     return [];
@@ -75,7 +73,6 @@ function formatTime(timestamp: number): string {
 function getGroupLabel(timestamp: number): string {
   const diff = Math.max(0, Date.now() - timestamp);
   const days = Math.floor(diff / 86400000);
-
   if (days === 0) return "Today";
   if (days === 1) return "Yesterday";
   if (days < 7) return "This week";
@@ -84,10 +81,24 @@ function getGroupLabel(timestamp: number): string {
 
 export default function HistoryPage() {
   const router = useRouter();
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
 
-  const [sessions, setSessions] = useState<ChatSession[]>(() =>
-    loadHistory().sort((a, b) => b.timestamp - a.timestamp)
-  );
+  // Load on mount — NOT just in useState initializer so we can also refresh
+  const refresh = useCallback(() => {
+    setSessions(loadHistory());
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // ── Listen for storage events from chat page saving sessions ──
+  useEffect(() => {
+    const handleStorage = () => refresh();
+    window.addEventListener("storage", handleStorage);
+    // Also listen for same-tab custom events (chat page fires window storage)
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [refresh]);
 
   const groupedSessions = useMemo(() => {
     return sessions.reduce<Record<string, ChatSession[]>>((acc, session) => {
@@ -101,9 +112,8 @@ export default function HistoryPage() {
   const deleteSession = (id: string, event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-
     setSessions((current) => {
-      const updated = current.filter((session) => session.id !== id);
+      const updated = current.filter((s) => s.id !== id);
       localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
       return updated;
     });
@@ -119,6 +129,24 @@ export default function HistoryPage() {
   return (
     <AppShell title="Session History">
       <div className="mx-auto max-w-3xl space-y-8 p-[var(--container-padding)]">
+
+        {/* Header row with refresh button */}
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-on-surface-variant">
+            {sessions.length > 0
+              ? `${sessions.length} session${sessions.length !== 1 ? "s" : ""} saved`
+              : "No sessions yet"}
+          </p>
+          <button
+            type="button"
+            onClick={refresh}
+            className="flex items-center gap-1.5 rounded-lg border border-outline-variant px-3 py-1.5 text-xs text-on-surface-variant transition hover:border-primary hover:text-primary"
+          >
+            <RefreshCw size={12} />
+            Refresh
+          </button>
+        </div>
+
         {sessions.length === 0 ? (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
@@ -128,16 +156,13 @@ export default function HistoryPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-high">
               <MessageSquare size={24} className="text-on-surface-variant" />
             </div>
-
             <p className="text-lg font-medium text-on-surface">
               No chat history yet
             </p>
-
             <p className="text-sm text-on-surface-variant">
               Start a conversation in the Chat page and your sessions will
               appear here.
             </p>
-
             <Button variant="primary" onClick={() => router.push("/chat")}>
               Go to Chat
             </Button>
@@ -152,7 +177,6 @@ export default function HistoryPage() {
                 <p className="mb-3 text-xs font-medium uppercase tracking-widest text-on-surface-variant">
                   {group}
                 </p>
-
                 <div className="space-y-3">
                   {groupSessions.map((session, index) => (
                     <motion.div
@@ -169,25 +193,22 @@ export default function HistoryPage() {
                           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-surface-container-high text-primary">
                             <MessageSquare size={18} />
                           </div>
-
                           <div className="min-w-0">
                             <p className="truncate font-medium text-on-surface">
                               {session.title}
                             </p>
-
                             <p className="flex items-center gap-2 text-sm text-on-surface-variant">
                               <Clock size={12} />
                               {formatTime(session.timestamp)}
                               {session.repo && (
                                 <>
-                                  <span>|</span>
-                                  <span className="truncate font-mono text-xs">
+                                  <span>·</span>
+                                  <span className="truncate font-mono text-xs text-secondary">
                                     {session.repo}
                                   </span>
                                 </>
                               )}
                             </p>
-
                             {session.preview && (
                               <p className="mt-0.5 truncate text-xs text-on-surface-variant">
                                 {session.preview}
@@ -200,18 +221,14 @@ export default function HistoryPage() {
                           <span className="font-mono text-xs text-on-surface-variant">
                             {session.messageCount} msgs
                           </span>
-
                           <button
                             type="button"
-                            onClick={(event) =>
-                              deleteSession(session.id, event)
-                            }
+                            onClick={(e) => deleteSession(session.id, e)}
                             className="rounded p-1.5 text-on-surface-variant opacity-0 transition hover:bg-surface-variant hover:text-tertiary group-hover:opacity-100"
                             aria-label="Delete session"
                           >
                             <Trash2 size={14} />
                           </button>
-
                           <ChevronRight
                             size={16}
                             className="text-on-surface-variant"

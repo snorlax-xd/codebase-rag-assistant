@@ -1,0 +1,241 @@
+## Project Identity
+- **Project Name:** CodeMind AI — Codebase RAG Assistant
+- **Purpose:** A full-stack AI-powered platform where users paste any GitHub repo URL, the system clones + indexes it, and users can chat with the codebase, search semantically, visualize architecture, and browse files.
+- **Live URLs:**
+  - Frontend: https://codebase-rag-assistant.vercel.app
+  - Backend: https://codebase-rag-assistant-production.up.railway.app
+  - Backend Swagger: https://codebase-rag-assistant-production.up.railway.app/docs
+
+---
+
+## Tech Stack
+
+### Frontend
+- **Framework:** Next.js 16.2.6 (App Router, Turbopack)
+- **Language:** TypeScript
+- **Styling:** Tailwind CSS with custom design tokens
+- **Animations:** Framer Motion
+- **Code Editor:** Monaco Editor (via `@/components/features/CodeEditor`)
+- **Architecture Graph:** ReactFlow (`@xyflow/react`)
+- **Icons:** Lucide React
+- **Deployment:** Vercel
+- **Root Directory on Vercel:** `frontend/codemind-ai`
+- **Env Variable:** `NEXT_PUBLIC_API_URL=https://codebase-rag-assistant-production.up.railway.app`
+
+### Backend
+- **Framework:** FastAPI (Python 3.11)
+- **LLM:** Gemini 1.5 Flash (via direct REST API — NOT the SDK)
+- **Embeddings:** Gemini Embedding 001 (via direct REST API, v1beta endpoint)
+- **Vector DB:** Qdrant (running as Docker service on Railway)
+- **Code Parsing:** tree-sitter (Python only; other languages use raw content fallback)
+- **Git Cloning:** GitPython
+- **Deployment:** Railway (Docker)
+- **Env Variable:** `GEMINI_API_KEY=<actual key>`
+
+### Key Backend Facts
+- Embedding model: `gemini-embedding-001` via `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent`
+- Vector dimensions: **3072** (gemini-embedding-001 output size)
+- LLM model: `gemini-1.5-flash` via `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent`
+- Qdrant collection name: `codebase_chunks`
+- Rate limit handling: 0.7s proactive delay + retry on 429/503 (up to 7 retries)
+- Indexing is **background task** — returns immediately with `indexing_started`
+- CORS allows: `localhost:3000` + `https://codebase-rag-assistant.vercel.app` + `https://*.vercel.app`
+
+---
+
+## Repository Structure
+
+```
+Codebase RAG Assistant/
+├── backend/
+│   └── app/
+│       ├── main.py                    # FastAPI app, CORS config
+│       ├── api/
+│       │   └── repo_api.py            # All API endpoints
+│       ├── parsers/
+│       │   └── tree_sitter_parser.py  # Python AST parser (iterative, not recursive)
+│       └── services/
+│           ├── embedding_service.py   # Gemini REST embeddings
+│           ├── file_service.py        # Scan repo, parse files
+│           ├── llm_service.py         # Gemini REST chat
+│           ├── qdrant_service.py      # Qdrant client, store/search
+│           └── repo_service.py        # Clone, index, search orchestration
+├── frontend/
+│   └── codemind-ai/
+│       └── src/
+│           ├── app/
+│           │   ├── layout.tsx         # Root layout (fonts, html/body)
+│           │   ├── page.tsx           # Landing — redirects to /chat or /repositories
+│           │   ├── chat/page.tsx      # Main chat interface
+│           │   ├── repositories/page.tsx  # Repo management
+│           │   ├── history/page.tsx   # Chat session history
+│           │   ├── semantic-search/page.tsx  # Semantic code search
+│           │   ├── architecture/page.tsx     # ReactFlow dependency graph
+│           │   └── settings/page.tsx  # LLM config, appearance
+│           ├── components/
+│           │   ├── layout/
+│           │   │   ├── AppShell.tsx   # Main layout wrapper with mobile sidebar
+│           │   │   ├── Sidebar.tsx    # Nav sidebar (reads PRIMARY_NAV)
+│           │   │   ├── Topbar.tsx     # Top bar with onMenuClick prop
+│           │   │   └── FileExplorer.tsx  # Live file tree from /scan-repo
+│           │   ├── features/
+│           │   │   ├── ArchitectureFlow.tsx  # ReactFlow with real data wiring
+│           │   │   └── CodeEditor.tsx        # Monaco editor
+│           │   ├── ambient/
+│           │   │   └── AmbientLayer.tsx
+│           │   └── ui/
+│           │       ├── badge.tsx, button.tsx, card.tsx
+│           │       ├── GlassCard.tsx, GlowButton.tsx
+│           │       ├── input.tsx, progress.tsx
+│           │       ├── Shimmer.tsx, SystemIndicator.tsx
+│           │       └── [NO ChatWindow, CodeExplorer, CodePreview, MessageBubble — deleted]
+│           └── lib/
+│               ├── api/client.ts      # All fetch wrappers to backend
+│               ├── constants/navigation.ts  # PRIMARY_NAV, APP_NAME, DEFAULT_REPO
+│               ├── motion/presets.ts  # easePremium
+│               ├── types/navigation.ts
+│               └── utils/cn.ts
+```
+
+---
+
+## LocalStorage Keys (Frontend State)
+| Key | Purpose |
+|-----|---------|
+| `codemind_repos` | Array of added repositories (persisted across sessions) |
+| `codemind_active_repo` | Currently selected repo name for chat/search/architecture |
+| `codemind_chat_history` | Array of past chat sessions |
+| `codemind_current_session_id` | Active session ID being written to |
+| `codemind_prefill_query` | Query prefilled from semantic search "Ask AI" button |
+
+---
+
+## Backend API Endpoints
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | `/clone-repo?repo_url=` | Clone a GitHub repo |
+| GET | `/scan-repo?repo_name=` | Get file tree of a cloned repo |
+| POST | `/create-collection` | Create Qdrant collection |
+| DELETE | `/delete-collection` | Delete Qdrant collection |
+| POST | `/index-repo?repo_name=` | Start background indexing |
+| GET | `/search?query=` | Semantic search |
+| GET | `/ask?query=` | RAG question answering |
+| GET | `/collection-info` | Vector count in Qdrant |
+
+---
+
+## Phase Plan (from architectural planning session)
+
+### Phase 1 — Fix broken pages + wire Repositories ✅ DONE
+- [x] Repositories page — code correct, committed
+- [x] Add Repository modal with clone + index flow
+- [x] LocalStorage persistence for repos
+- [x] History page with grouped sessions
+- [x] Session saving from chat page
+- [x] Prefill query from semantic search
+
+### Phase 2 — Files, History, Semantic Search ✅ DONE
+- [x] History page reads from localStorage, groups by time, delete works
+- [x] Semantic search wired to real `/search` backend endpoint
+- [x] FileExplorer wired to live `/scan-repo` backend endpoint
+- [x] "Ask AI" on search results prefills chat query
+
+### Phase 3 — Architecture + Repo Switching 🔄 IN PROGRESS
+- [x] Architecture page — ArchitectureFlow fetches real data from `/search`
+- [ ] **NEXT:** Repo selector dropdown in Topbar (replaces hardcoded "main-repo" pill)
+- [ ] Multi-repo chat context (pass `repo_name` filter to `/ask` and `/search`)
+
+### Phase 4 — New Features (PLANNED)
+- [ ] Code explanation mode — "Explain this" button on code blocks
+- [ ] Bug detection endpoint (`POST /analyze`)
+- [ ] Auto README generation (`GET /generate-readme`)
+- [ ] Monaco diff viewer
+- [ ] GitHub integration (commits, PRs via PyGithub)
+- [ ] Share a chat session (shareable link)
+
+---
+
+## Critical Bugs Fixed (reference for future sessions)
+
+### Frontend
+1. `app/page.tsx` was a duplicate of `layout.tsx` — fixed to be a redirect component
+2. `repositories/page.tsx` was never `git add`ed — was missing from Vercel builds
+3. `app/settings/layout.tsx` had full root layout — fixed to minimal wrapper
+4. `AppShell.tsx` hamburger menu had no handler — fixed with `sidebarOpen` state
+5. `Topbar.tsx` had `onMenuClick` in type but not destructured — fixed
+6. `ChatWindow.tsx`, `CodeExplorer.tsx`, `CodePreview.tsx`, `MessageBubble.tsx` — deleted (old ChatGPT prototype, replaced by proper Cursor components)
+7. Settings page had fake sidebar with `<div>` instead of `<Link>` — caused navigation to break
+8. `ArchitectureFlow.tsx` called `nodeStyle()` before it was declared — moved above `initialNodes`
+9. History delete button had `opacity-0 group-hover:opacity-100` but parent lacked `group` class — fixed
+10. Session key mismatch: history saved to `codemind_active_session` but chat read `codemind_current_session_id` — unified
+
+### Backend
+1. `qdrant_service.oy` typo — renamed to `.py`
+2. `file_services.py` / `embedding_services.py` wrong names — renamed to match imports
+3. Mid-file imports in qdrant_service — moved to top
+4. No CORS — added `CORSMiddleware`
+5. Ollama not reachable from Railway — switched to Gemini REST API
+6. OpenAI had no credits — switched to Gemini (free tier)
+7. `google-generativeai` SDK conflicted with `protobuf==7.34.1` — switched to direct HTTP calls
+8. Gemini `text-embedding-004` → deprecated → switched to `gemini-embedding-001`
+9. Vector size was 768 → changed to 3072 to match `gemini-embedding-001`
+10. `client.search()` removed in new qdrant-client — changed to `client.query_points()`
+11. Rate limiting: added 0.7s proactive delay + exponential backoff retry
+12. `split_text()` split on raw chars — fixed to split on line boundaries
+13. Indexing crashed entire job on single chunk failure — wrapped each chunk in try/except/continue
+
+---
+
+## Design System Notes
+- Color tokens: `primary`, `secondary`, `tertiary`, `on-surface`, `on-surface-variant`, `surface-container-*`, `outline-variant`
+- Custom CSS classes: `glass-panel`, `glass-card`, `topbar-glass`, `nav-active-glow`, `grid-bg`, `status-pulse`, `ai-insight-border`
+- Font variables: `--font-geist-sans`, `--font-geist-mono`, `--font-space-grotesk`, `--font-jetbrains-mono`, `--font-ibm-plex-mono`
+- Motion: `easePremium` from `@/lib/motion/presets`
+- All pages use `AppShell` as wrapper
+
+---
+
+## Important Rules for Future Sessions
+1. **Always stress test before writing code** — check for TypeScript errors, missing imports, wrong variant names, key mismatches
+2. **Never use `Badge variant="optimal"` or `variant="critical"`** — these don't exist; use inline span with conditional classes
+3. **Never use `Button variant="neon"`** — doesn't exist; use `variant="secondary"`
+4. **`repositories/page.tsx` must be explicitly `git add`ed** — it was never tracked
+5. **Gemini SDK (`google-generativeai` / `google-genai`) should NOT be used** — use direct HTTP REST calls only
+6. **Vector dimensions must be 3072** for `gemini-embedding-001`
+7. **Indexing is always async/background** — never await it synchronously
+8. **`codemind_active_repo` in localStorage** is the source of truth for which repo is active
+9. **`app/page.tsx` is a redirect** — not a layout, not a landing page
+10. **Vercel builds from GitHub** — local changes must be `git add` + `git commit` + `git push` to take effect
+
+---
+
+## Immediate Next Tasks (start here in next session)
+
+### Task 1 — Repo selector in Topbar (Phase 3)
+**File needed:** `components/layout/Topbar.tsx`
+- Replace hardcoded `DEFAULT_REPO` pill with a dropdown
+- Dropdown reads repos from `localStorage.getItem("codemind_repos")`
+- On select: sets `localStorage.setItem("codemind_active_repo", repoName)`
+- All pages already read from `codemind_active_repo`
+
+### Task 2 — Pass repo_name to backend calls (Phase 3)
+**File needed:** `lib/api/client.ts`
+- Add `repo_name` param to `askQuestion()` and `searchCode()`
+- Backend needs filter added to Qdrant search query
+
+### Task 3 — Backend: filter search by repo_name
+**File needed:** `backend/app/services/qdrant_service.py` + `repo_service.py`
+- Store `repo_name` as payload field during indexing
+- Add Qdrant `must` filter on `repo_name` in `search_similar_chunks()`
+
+### Task 4 — Repo selector wired to chat (Phase 3)
+- Active repo shown in topbar pill
+- Changing repo updates all pages automatically via localStorage
+
+---
+
+## Session Handoff Notes
+- The repositories 404 bug was caused by `app/page.tsx` being a duplicate of `layout.tsx` AND the file never being `git add`ed
+- Fix applied: replace `app/page.tsx` with redirect component + explicit `git add repositories/page.tsx`
+- After the next push + Vercel deploy, Vercel build logs should show 10 routes including `/repositories`
+- The project is otherwise fully functional: chat works end to end with real Gemini RAG responses

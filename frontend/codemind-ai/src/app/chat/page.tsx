@@ -9,6 +9,9 @@ import {
   Send,
   Sparkles,
   Plus,
+  GitBranch,
+  Layers,
+  FileCode,
 } from "lucide-react";
 
 import CodeEditor from "@/components/features/CodeEditor";
@@ -17,7 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import SystemIndicator from "@/components/ui/SystemIndicator";
 import { Card, GlassPanel } from "@/components/ui/card";
-import { askQuestion } from "@/lib/api/client";
+import { askQuestion, scanRepo, type ScannedFile } from "@/lib/api/client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -35,12 +38,14 @@ type Message = {
   codeBlocks?: CodeBlock[];
 };
 
-// ── History helpers ───────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const HISTORY_KEY = "codemind_chat_history";
 const SESSION_KEY = "codemind_current_session_id";
 const ACTIVE_REPO_KEY = "codemind_active_repo";
 const ASK_TIMEOUT_MS = 45000;
+
+// ── Session helpers ───────────────────────────────────────────────────────────
 
 type ChatSession = {
   id: string;
@@ -52,19 +57,23 @@ type ChatSession = {
   messages?: Message[];
 };
 
-function saveSession(sessionId: string, messages: Message[]) {
+function saveSession(sessionId: string, messages: Message[], repoName: string) {
+  if (!sessionId) return;
   try {
     const userMessages = messages.filter((m) => m.role === "user");
     const aiMessages = messages.filter((m) => m.role === "ai");
     if (userMessages.length === 0 || aiMessages.length === 0) return;
 
-    const session = {
+    const session: ChatSession = {
       id: sessionId,
-      title: userMessages[0].text.slice(0, 60) + (userMessages[0].text.length > 60 ? "..." : ""),
-      repo: localStorage.getItem(ACTIVE_REPO_KEY) || "",
+      title:
+        userMessages[0].text.slice(0, 60) +
+        (userMessages[0].text.length > 60 ? "..." : ""),
+      repo: repoName,
       timestamp: Date.now(),
       messageCount: messages.length,
-      preview: aiMessages.at(-1)?.text.slice(0, 100) || "",
+      preview:
+        aiMessages.at(-1)?.text.slice(0, 100) || "",
       messages,
     };
 
@@ -77,7 +86,11 @@ function saveSession(sessionId: string, messages: Message[]) {
       history.unshift(session);
     }
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
-  } catch {}
+    // Notify other tabs / history page
+    window.dispatchEvent(new Event("storage"));
+  } catch {
+    // silently fail
+  }
 }
 
 function generateSessionId(): string {
@@ -170,7 +183,9 @@ function AiMessage({ message }: { message: Message }) {
                   <div className="mt-4 space-y-3 border-t border-outline-variant pt-4">
                     <div className="flex items-center gap-2 text-sm">
                       <span className="h-2 w-2 rounded-full bg-secondary status-pulse" />
-                      <span className="font-bold text-secondary">ACTIVE ANALYSIS</span>
+                      <span className="font-bold text-secondary">
+                        ACTIVE ANALYSIS
+                      </span>
                     </div>
                     <ul className="space-y-2 text-sm">
                       {[
@@ -204,11 +219,15 @@ function AiMessage({ message }: { message: Message }) {
                               <motion.div
                                 initial={{ width: 0 }}
                                 animate={{
-                                  width: c.score > 0
-                                    ? `${c.score * 100}%`
-                                    : `${90 - i * 15}%`,
+                                  width:
+                                    c.score > 0
+                                      ? `${c.score * 100}%`
+                                      : `${90 - i * 15}%`,
                                 }}
-                                transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
+                                transition={{
+                                  duration: 0.8,
+                                  ease: [0.22, 1, 0.36, 1],
+                                }}
                                 className="h-full bg-gradient-to-r from-secondary-container to-secondary"
                               />
                             </div>
@@ -222,7 +241,7 @@ function AiMessage({ message }: { message: Message }) {
             </AnimatePresence>
           </GlassPanel>
 
-          <p className="text-sm leading-relaxed text-on-surface whitespace-pre-wrap">
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-on-surface">
             {message.text}
           </p>
 
@@ -242,7 +261,9 @@ function AiMessage({ message }: { message: Message }) {
                   >
                     <span className="text-on-surface-variant">▣</span>
                     {block.filename}
-                    {block.badge && <Badge variant="muted">{block.badge}</Badge>}
+                    {block.badge && (
+                      <Badge variant="muted">{block.badge}</Badge>
+                    )}
                     {block.dep && (
                       <span className="text-[10px] text-on-surface-variant">
                         {block.dep}
@@ -254,7 +275,9 @@ function AiMessage({ message }: { message: Message }) {
               <div className="h-64">
                 <CodeEditor
                   value={message.codeBlocks[activeTab]?.code ?? ""}
-                  language={message.codeBlocks[activeTab]?.language ?? "python"}
+                  language={
+                    message.codeBlocks[activeTab]?.language ?? "python"
+                  }
                   path={message.codeBlocks[activeTab]?.filename ?? "file"}
                 />
               </div>
@@ -274,63 +297,88 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string>("");
   const [activeRepo, setActiveRepo] = useState<string>("");
+
+  // Sidebar state — real data from /scan-repo
+  const [repoFiles, setRepoFiles] = useState<ScannedFile[]>([]);
+  const [repoLoading, setRepoLoading] = useState(false);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<boolean>(false);
 
-  // ── On mount: load prefill + active session ──
-  useEffect(() => {
-    const syncActiveRepo = () => {
-      setActiveRepo(localStorage.getItem(ACTIVE_REPO_KEY) || "");
-    };
-    queueMicrotask(syncActiveRepo);
-    window.addEventListener("codemind-active-repo-change", syncActiveRepo);
-
-    // Load prefill from semantic search "Ask AI" button
-    const prefill = localStorage.getItem("codemind_prefill_query");
-    if (prefill) {
-      localStorage.removeItem("codemind_prefill_query");
-      queueMicrotask(() => setInput(prefill));
+  // ── Load repo scan data for the sidebar ──
+  const loadRepoData = useCallback(async (repo: string) => {
+    if (!repo) return;
+    setRepoLoading(true);
+    try {
+      const data = await scanRepo(repo);
+      setRepoFiles(data.files ?? []);
+    } catch {
+      setRepoFiles([]);
+    } finally {
+      setRepoLoading(false);
     }
+  }, []);
 
-    // Load active session if navigated from history
-    const activeSessionId = localStorage.getItem(SESSION_KEY);
-    if (activeSessionId) {
-      try {
-        const raw = localStorage.getItem(HISTORY_KEY);
-        const history: ChatSession[] = raw ? JSON.parse(raw) : [];
-        const session = history.find((s) => s.id === activeSessionId);
-        if (session?.messages?.length) {
-          queueMicrotask(() => {
+  // ── On mount: sync repo, load prefill, restore or start session ──
+  useEffect(() => {
+    abortRef.current = false;
+
+    const init = () => {
+      const storedRepo = localStorage.getItem(ACTIVE_REPO_KEY) || "";
+      setActiveRepo(storedRepo);
+      if (storedRepo) loadRepoData(storedRepo);
+
+      // Prefill from "Ask AI" on semantic search
+      const prefill = localStorage.getItem("codemind_prefill_query");
+      if (prefill) {
+        localStorage.removeItem("codemind_prefill_query");
+        setInput(prefill);
+      }
+
+      // Try to restore a session if one was clicked from history
+      const activeSessionId = localStorage.getItem(SESSION_KEY);
+      if (activeSessionId) {
+        try {
+          const raw = localStorage.getItem(HISTORY_KEY);
+          const history: ChatSession[] = raw ? JSON.parse(raw) : [];
+          const session = history.find((s) => s.id === activeSessionId);
+
+          if (session?.messages?.length) {
             setSessionId(activeSessionId);
-            setMessages(session.messages ?? []);
+            setMessages(session.messages);
             if (session.repo) {
               localStorage.setItem(ACTIVE_REPO_KEY, session.repo);
               setActiveRepo(session.repo);
+              loadRepoData(session.repo);
             }
-          });
-          return () => {
-            window.removeEventListener("codemind-active-repo-change", syncActiveRepo);
-            abortRef.current = true;
-          };
+            return; // Don't generate a new session — we're restoring
+          }
+        } catch {
+          localStorage.removeItem(SESSION_KEY);
         }
-        if (session?.title) {
-          queueMicrotask(() => setInput(session.title));
-        }
-      } catch {
-        localStorage.removeItem(SESSION_KEY);
       }
-    }
 
-    // Generate new session ID for this conversation
-    const newId = generateSessionId();
-    localStorage.setItem(SESSION_KEY, newId);
-    queueMicrotask(() => setSessionId(newId));
+      // Fresh session
+      const newId = generateSessionId();
+      localStorage.setItem(SESSION_KEY, newId);
+      setSessionId(newId);
+    };
+
+    queueMicrotask(init);
+
+    const syncRepo = (e: Event) => {
+      const newRepo = (e as CustomEvent<string>).detail;
+      setActiveRepo(newRepo);
+      loadRepoData(newRepo);
+    };
+
+    window.addEventListener("codemind-active-repo-change", syncRepo);
 
     return () => {
-      window.removeEventListener("codemind-active-repo-change", syncActiveRepo);
+      window.removeEventListener("codemind-active-repo-change", syncRepo);
       abortRef.current = true;
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Auto-scroll ──
   useEffect(() => {
@@ -340,12 +388,12 @@ export default function ChatPage() {
   // ── Save to history after every AI response ──
   useEffect(() => {
     if (!sessionId || messages.length === 0) return;
-    const hasAiResponse = messages.some((m) => m.role === "ai");
-    const hasUserMessage = messages.some((m) => m.role === "user");
-    if (hasAiResponse && hasUserMessage) {
-      saveSession(sessionId, messages);
+    const hasAi = messages.some((m) => m.role === "ai");
+    const hasUser = messages.some((m) => m.role === "user");
+    if (hasAi && hasUser) {
+      saveSession(sessionId, messages, activeRepo);
     }
-  }, [messages, sessionId]);
+  }, [messages, sessionId, activeRepo]);
 
   const startNewChat = useCallback(() => {
     setMessages([]);
@@ -365,11 +413,11 @@ export default function ChatPage() {
 
     setMessages((prev) => [...prev, { role: "user", text: userText }]);
 
-    let timeout: number | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
 
     try {
       const controller = new AbortController();
-      timeout = window.setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+      timeout = setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
       const repoName = localStorage.getItem(ACTIVE_REPO_KEY);
       const data = await askQuestion(userText, repoName, controller.signal);
 
@@ -378,13 +426,20 @@ export default function ChatPage() {
       const codeBlocks: CodeBlock[] = (data.sources ?? [])
         .filter((s: { content?: string }) => s.content)
         .slice(0, 3)
-        .map((s: { file_name?: string; score?: number; language?: string; content: string }) => ({
-          filename: s.file_name ?? "result.py",
-          badge: "Retrieved",
-          dep: `Score: ${s.score?.toFixed(3) ?? "0.000"}`,
-          language: s.language?.toLowerCase() ?? "python",
-          code: s.content,
-        }));
+        .map(
+          (s: {
+            file_name?: string;
+            score?: number;
+            language?: string;
+            content: string;
+          }) => ({
+            filename: s.file_name ?? "result.py",
+            badge: "Retrieved",
+            dep: `Score: ${s.score?.toFixed(3) ?? "0.000"}`,
+            language: s.language?.toLowerCase() ?? "python",
+            code: s.content,
+          })
+        );
 
       setMessages((prev) => [
         ...prev,
@@ -407,33 +462,40 @@ export default function ChatPage() {
         { role: "ai", text: `Error: ${msg}` },
       ]);
     } finally {
-      if (timeout) window.clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       if (!abortRef.current) setIsLoading(false);
     }
   };
 
-  const lastAiMessage = messages.filter((m) => m.role === "ai").at(-1);
-  const repoSummary = lastAiMessage
-    ? lastAiMessage.text
-    : activeRepo
-      ? `Ask about ${activeRepo} to generate a repository-specific summary.`
-      : "Select or add a repository to generate a summary.";
+  // ── Derive sidebar data from real scan ──
   const techStack = Array.from(
+    new Set(repoFiles.map((f) => f.language).filter(Boolean))
+  ).slice(0, 8);
+
+  const topDirs = Array.from(
     new Set(
-      messages
-        .flatMap((message) => message.codeBlocks ?? [])
-        .map((block) => block.language)
+      repoFiles
+        .map((f) => {
+          const parts = f.path.replace(/\\/g, "/").split("/").filter(Boolean);
+          const idx = parts.findIndex((p) => p === "repositories");
+          const rel =
+            idx >= 0 ? parts.slice(idx + 2) : parts.slice(-3);
+          return rel[0] && rel[0] !== f.file_name ? rel[0] : null;
+        })
         .filter(Boolean)
     )
-  );
+  ).slice(0, 5) as string[];
+
+  const repoSummary = activeRepo
+    ? repoLoading
+      ? "Loading repository info..."
+      : repoFiles.length > 0
+        ? `${repoFiles.length} files across ${topDirs.length} top-level directories. Primary languages: ${techStack.slice(0, 3).join(", ") || "unknown"}.`
+        : "Repository not indexed yet. Add the repo and run indexing from the Repositories tab."
+    : "Select or add a repository to generate a summary.";
 
   return (
-    <AppShell
-      title="Code Intelligence Chat"
-      showRepoPills
-      showContextButton
-      fullBleed
-    >
+    <AppShell title="Code Intelligence Chat" showRepoPills showContextButton fullBleed>
       <div className="flex min-h-0 flex-1 overflow-hidden">
 
         {/* ── Main chat column ── */}
@@ -455,8 +517,9 @@ export default function ChatPage() {
                     Ask about your codebase
                   </p>
                   <p className="max-w-md text-sm text-on-surface-variant">
-                    Index a repository first, then ask questions about its architecture,
-                    functions, bugs, or patterns.
+                    {activeRepo
+                      ? `Chatting with ${activeRepo}. Ask about its architecture, functions, bugs, or patterns.`
+                      : "Index a repository first, then ask questions about its architecture, functions, bugs, or patterns."}
                   </p>
                   <div className="mt-2 flex flex-wrap justify-center gap-2">
                     {[
@@ -535,7 +598,9 @@ export default function ChatPage() {
                   placeholder={
                     isLoading
                       ? "Waiting for response..."
-                      : "Ask about your codebase..."
+                      : activeRepo
+                        ? `Ask about ${activeRepo}...`
+                        : "Ask about your codebase..."
                   }
                   disabled={isLoading}
                   className="flex-1 resize-none bg-transparent text-sm text-on-surface outline-none placeholder:text-on-surface-variant disabled:opacity-50"
@@ -560,115 +625,136 @@ export default function ChatPage() {
           </div>
         </section>
 
-        {/* ── Right sidebar ── */}
+        {/* ── Right sidebar — real repo data ── */}
         <aside className="hidden w-80 shrink-0 flex-col border-l border-outline-variant/60 bg-surface-container-low/80 backdrop-blur-xl xl:flex">
           <div className="border-b border-outline-variant p-4">
             <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
               Repository Context
             </p>
-          </div>
-          <div className="flex-1 space-y-4 overflow-y-auto p-4">
-            <Card className="p-3">
-              <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
-                Repository Summary
+            {activeRepo && (
+              <p className="mt-1 truncate font-mono text-sm text-primary">
+                {activeRepo}
               </p>
-              <p className="mt-3 max-h-52 overflow-y-auto text-sm leading-relaxed text-on-surface-variant">
+            )}
+          </div>
+
+          <div className="flex-1 space-y-4 overflow-y-auto p-4">
+
+            {/* Summary — derived from real scan */}
+            <Card className="p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <GitBranch size={13} className="text-secondary" />
+                <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
+                  Repository Summary
+                </p>
+              </div>
+              <p className="text-sm leading-relaxed text-on-surface-variant">
                 {repoSummary}
               </p>
+              {repoFiles.length > 0 && (
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="rounded bg-surface-container-high p-2 text-center">
+                    <p className="font-mono text-lg font-bold text-primary">
+                      {repoFiles.length}
+                    </p>
+                    <p className="font-mono text-[10px] text-on-surface-variant">
+                      FILES
+                    </p>
+                  </div>
+                  <div className="rounded bg-surface-container-high p-2 text-center">
+                    <p className="font-mono text-lg font-bold text-secondary">
+                      {topDirs.length}
+                    </p>
+                    <p className="font-mono text-[10px] text-on-surface-variant">
+                      DIRS
+                    </p>
+                  </div>
+                </div>
+              )}
             </Card>
 
+            {/* Tech stack — from real scan */}
             <GlassPanel animate={false}>
-              <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
-                Tech Stack
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mb-3 flex items-center gap-2">
+                <Layers size={13} className="text-secondary" />
+                <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
+                  Tech Stack
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
                 {techStack.length > 0 ? (
-                  techStack.map((language) => (
+                  techStack.map((lang) => (
                     <span
-                      key={language}
+                      key={lang}
                       className="rounded border border-outline-variant bg-surface-container-high px-2 py-1 font-mono text-xs text-primary"
                     >
-                      {language}
+                      {lang}
                     </span>
                   ))
                 ) : (
                   <p className="text-sm text-on-surface-variant">
-                    Tech stack appears after code context is retrieved.
+                    {activeRepo
+                      ? repoLoading
+                        ? "Loading..."
+                        : "Index this repo to detect tech stack."
+                      : "Select a repository first."}
                   </p>
                 )}
               </div>
             </GlassPanel>
 
-            <div className="hidden">
-            <Card className="p-3">
-              <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
-                Vector Semantic Map
-              </p>
-              <pre className="mt-2 font-mono text-xs text-secondary">
-                {lastAiMessage?.codeBlocks?.[0]
-                  ? `match: ${lastAiMessage.codeBlocks[0].filename}\nscore: ${lastAiMessage.codeBlocks[0].dep?.replace("Score: ", "") ?? "—"}`
-                  : `match: —\nscore: —`}
-              </pre>
-            </Card>
-
-            <GlassPanel animate={false} className="text-center">
-              <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
-                Matching Score
-              </p>
-              <p className="mt-2 text-4xl font-bold text-primary">
-                {lastAiMessage?.codeBlocks?.[0]?.dep?.replace("Score: ", "") ?? "—"}
-              </p>
-            </GlassPanel>
-
-            <Card className="p-3">
-              <p className="mb-3 font-mono text-xs uppercase tracking-widest text-on-surface-variant">
-                Retrieved Files
-              </p>
-              <ul className="space-y-2 font-mono text-sm text-on-surface-variant">
-                {lastAiMessage?.codeBlocks?.length ? (
-                  lastAiMessage.codeBlocks.map((b, i) => (
-                    <li key={i} className={i === 0 ? "text-primary" : "pl-2"}>
-                      {i > 0 ? "→ " : ""}{b.filename}
+            {/* Top directories */}
+            {topDirs.length > 0 && (
+              <Card className="p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <FileCode size={13} className="text-secondary" />
+                  <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
+                    Top Directories
+                  </p>
+                </div>
+                <ul className="space-y-1">
+                  {topDirs.map((dir) => (
+                    <li
+                      key={dir}
+                      className="flex items-center gap-2 font-mono text-xs text-on-surface-variant"
+                    >
+                      <span className="h-1 w-1 rounded-full bg-secondary" />
+                      {dir}
                     </li>
-                  ))
-                ) : (
-                  <li className="text-on-surface-variant">No files retrieved yet</li>
-                )}
-              </ul>
-            </Card>
+                  ))}
+                </ul>
+              </Card>
+            )}
 
-            <Card className="p-3">
-              <p className="mb-2 font-mono text-xs uppercase tracking-widest text-on-surface-variant">
-                Context Health
-              </p>
-              <div className="space-y-2">
-                {[
-                  { label: "Functions", value: 46, color: "bg-primary" },
-                  { label: "Classes", value: 35, color: "bg-secondary" },
-                  { label: "Imports", value: 13, color: "bg-tertiary" },
-                  { label: "Misc", value: 6, color: "bg-outline" },
-                ].map((item) => (
-                  <div key={item.label} className="flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full ${item.color}`} />
-                    <span className="flex-1 text-xs text-on-surface-variant">
-                      {item.label}
-                    </span>
-                    <span className="font-mono text-xs text-on-surface">
-                      {item.value}%
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-
-            <Card className="ai-insight-border p-4">
-              <p className="text-sm leading-relaxed text-on-surface-variant">
-                {lastAiMessage
-                  ? lastAiMessage.text.slice(0, 120) + (lastAiMessage.text.length > 120 ? "..." : "")
-                  : "Ask a question to see AI insights here."}
-              </p>
-            </Card>
-            </div>
+            {/* Retrieved files from last AI response */}
+            {messages.some((m) => m.role === "ai" && m.codeBlocks?.length) && (
+              <Card className="p-3">
+                <p className="mb-2 font-mono text-xs uppercase tracking-widest text-on-surface-variant">
+                  Last Retrieved Files
+                </p>
+                <ul className="space-y-1.5 font-mono text-xs">
+                  {messages
+                    .filter((m) => m.role === "ai" && m.codeBlocks?.length)
+                    .at(-1)
+                    ?.codeBlocks?.map((b, i) => (
+                      <li
+                        key={i}
+                        className={
+                          i === 0
+                            ? "text-primary"
+                            : "pl-2 text-on-surface-variant"
+                        }
+                      >
+                        {i > 0 ? "→ " : ""}
+                        {b.filename}
+                        <span className="ml-2 text-[10px] text-secondary">
+                          {b.dep}
+                        </span>
+                      </li>
+                    ))}
+                </ul>
+              </Card>
+            )}
           </div>
         </aside>
       </div>

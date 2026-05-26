@@ -12,7 +12,7 @@ import {
   Terminal,
   Zap,
 } from "lucide-react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { APP_NAME, DEFAULT_REPO } from "@/lib/constants/navigation";
@@ -44,16 +44,21 @@ function loadStoredRepos(): StoredRepo[] {
     const raw = localStorage.getItem(REPOS_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed)
-      ? parsed.filter((repo: StoredRepo) => typeof repo.name === "string" && repo.name)
+      ? parsed.filter(
+          (repo: StoredRepo) =>
+            typeof repo.name === "string" && repo.name
+        )
       : [];
   } catch {
     return [];
   }
 }
 
-function setStoredActiveRepo(repoName: string) {
+export function setStoredActiveRepo(repoName: string) {
   localStorage.setItem(ACTIVE_REPO_KEY, repoName);
-  window.dispatchEvent(new CustomEvent("codemind-active-repo-change", { detail: repoName }));
+  window.dispatchEvent(
+    new CustomEvent("codemind-active-repo-change", { detail: repoName })
+  );
 }
 
 export default function Topbar({
@@ -67,12 +72,12 @@ export default function Topbar({
   onMenuClick,
 }: TopbarProps) {
   const pathname = usePathname();
-  const router = useRouter();
   const [activeRepo, setActiveRepo] = useState(DEFAULT_REPO);
   const [repoMenuOpen, setRepoMenuOpen] = useState(false);
   const [repos, setRepos] = useState<StoredRepo[]>([]);
   const [repoFiles, setRepoFiles] = useState<ScannedFile[]>([]);
 
+  // ── Sync active repo from localStorage and listen for changes ──
   useEffect(() => {
     const syncActiveRepo = () => {
       const stored = localStorage.getItem(ACTIVE_REPO_KEY);
@@ -82,100 +87,131 @@ export default function Topbar({
 
     queueMicrotask(syncActiveRepo);
     window.addEventListener("codemind-active-repo-change", syncActiveRepo);
+    // Also sync when storage is changed from another tab/page
+    window.addEventListener("storage", syncActiveRepo);
 
     return () => {
       window.removeEventListener("codemind-active-repo-change", syncActiveRepo);
+      window.removeEventListener("storage", syncActiveRepo);
     };
   }, [pathname]);
 
+  // ── Fetch files for the active repo when dropdown opens ──
   useEffect(() => {
-    if (!repoMenuOpen || activeRepo === DEFAULT_REPO) return;
+    if (!repoMenuOpen) return;
+    const currentRepo = localStorage.getItem(ACTIVE_REPO_KEY);
+    if (!currentRepo || currentRepo === DEFAULT_REPO) return;
 
-    queueMicrotask(async () => {
+    (async () => {
       try {
-        const data = await scanRepo(activeRepo);
+        const data = await scanRepo(currentRepo);
         setRepoFiles((data.files ?? []).slice(0, 8));
       } catch {
         setRepoFiles([]);
       }
-    });
-  }, [activeRepo, repoMenuOpen]);
+    })();
+  }, [repoMenuOpen]);
 
+  // ── Selecting a repo: ONLY updates active repo, does NOT navigate ──
   const handleRepoSelect = (repoName: string) => {
     setStoredActiveRepo(repoName);
     setActiveRepo(repoName);
+    setRepoFiles([]); // reset files so they reload for new repo
     setRepoMenuOpen(false);
-    router.push(`/architecture?repo=${encodeURIComponent(repoName)}`);
   };
 
+  // ── Clicking a file: prefills chat and navigates to chat ──
   const handleFileSelect = (file: ScannedFile) => {
-    localStorage.setItem("codemind_prefill_query", `Explain ${file.file_name} in ${activeRepo}`);
+    localStorage.setItem(
+      "codemind_prefill_query",
+      `Explain ${file.file_name} in ${activeRepo}`
+    );
     setRepoMenuOpen(false);
-    router.push("/chat");
+    window.location.href = "/chat";
   };
 
   const repoButton = (
     <div className="relative">
       <motion.button
         type="button"
-        whileHover={{ scale: 1.02, boxShadow: "0 0 20px rgba(128,131,255,0.15)" }}
+        whileHover={{
+          scale: 1.02,
+          boxShadow: "0 0 20px rgba(128,131,255,0.15)",
+        }}
         onClick={() => setRepoMenuOpen((open) => !open)}
         className="flex items-center gap-2 rounded-lg border border-outline-variant/80 bg-surface-container-highest/80 px-3 py-1.5 font-code-sm text-sm text-on-surface-variant backdrop-blur-sm transition hover:border-primary/50"
       >
         <Terminal size={16} className="text-secondary" />
         <span className="max-w-40 truncate">{activeRepo}</span>
-        <ChevronDown size={14} className={repoMenuOpen ? "rotate-180 transition" : "transition"} />
+        <ChevronDown
+          size={14}
+          className={repoMenuOpen ? "rotate-180 transition" : "transition"}
+        />
       </motion.button>
 
       {repoMenuOpen && (
-        <div className="absolute left-0 top-11 z-[60] w-72 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-low shadow-2xl">
-          <div className="border-b border-outline-variant/60 p-2">
-            <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-              Repositories
-            </p>
-            {repos.length === 0 ? (
-              <p className="px-2 py-2 text-xs text-on-surface-variant">No repositories added yet.</p>
-            ) : (
-              repos.map((repo) => (
-                <button
-                  key={repo.name}
-                  type="button"
-                  onClick={() => handleRepoSelect(repo.name!)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition hover:bg-surface-variant",
-                    repo.name === activeRepo ? "text-primary" : "text-on-surface"
-                  )}
-                >
-                  <Terminal size={14} />
-                  <span className="truncate">{repo.name}</span>
-                </button>
-              ))
-            )}
-          </div>
-
-          <div className="max-h-64 overflow-y-auto p-2">
-            <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-              Files in active repo
-            </p>
-            {repoFiles.length === 0 ? (
-              <p className="px-2 py-2 text-xs text-on-surface-variant">
-                Open after scanning to list files here.
+        <>
+          {/* Backdrop to close menu on outside click */}
+          <div
+            className="fixed inset-0 z-[55]"
+            onClick={() => setRepoMenuOpen(false)}
+          />
+          <div className="absolute left-0 top-11 z-[60] w-72 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-low shadow-2xl">
+            <div className="border-b border-outline-variant/60 p-2">
+              <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+                Switch Repository
               </p>
-            ) : (
-              repoFiles.map((file) => (
-                <button
-                  key={file.path}
-                  type="button"
-                  onClick={() => handleFileSelect(file)}
-                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-on-surface-variant transition hover:bg-surface-variant hover:text-on-surface"
-                >
-                  <FileCode2 size={13} />
-                  <span className="truncate">{file.file_name}</span>
-                </button>
-              ))
-            )}
+              {repos.length === 0 ? (
+                <p className="px-2 py-2 text-xs text-on-surface-variant">
+                  No repositories added yet.
+                </p>
+              ) : (
+                repos.map((repo) => (
+                  <button
+                    key={repo.name}
+                    type="button"
+                    onClick={() => handleRepoSelect(repo.name!)}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition hover:bg-surface-variant",
+                      repo.name === activeRepo
+                        ? "text-primary"
+                        : "text-on-surface"
+                    )}
+                  >
+                    <Terminal size={14} />
+                    <span className="truncate">{repo.name}</span>
+                    {repo.name === activeRepo && (
+                      <span className="ml-auto h-1.5 w-1.5 rounded-full bg-secondary" />
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+
+            <div className="max-h-64 overflow-y-auto p-2">
+              <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+                Files in {activeRepo}
+              </p>
+              {repoFiles.length === 0 ? (
+                <p className="px-2 py-2 text-xs text-on-surface-variant">
+                  Loading files...
+                </p>
+              ) : (
+                repoFiles.map((file) => (
+                  <button
+                    key={file.path}
+                    type="button"
+                    onClick={() => handleFileSelect(file)}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-on-surface-variant transition hover:bg-surface-variant hover:text-on-surface"
+                  >
+                    <FileCode2 size={13} />
+                    <span className="truncate">{file.file_name}</span>
+                  </button>
+                ))
+              )}
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
@@ -192,8 +228,11 @@ export default function Topbar({
         >
           <Menu size={20} />
         </motion.button>
+
         {showBrand ? (
-          <h1 className="font-display text-2xl font-bold text-primary">{APP_NAME}</h1>
+          <h1 className="font-display text-2xl font-bold text-primary">
+            {APP_NAME}
+          </h1>
         ) : (
           <motion.h1
             initial={{ opacity: 0, y: -4 }}
@@ -204,24 +243,20 @@ export default function Topbar({
             {title}
           </motion.h1>
         )}
-        {showRepoPills && (
-          <div className="ml-4 hidden items-center gap-2 md:flex">
-            {repoButton}
-          </div>
-        )}
-        {!showRepoPills && !showBrand && title && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="hidden md:flex"
-          >
-            {repoButton}
-          </motion.div>
-        )}
+
+        {/* Repo pill always shown next to title */}
+        <motion.div
+          initial={{ opacity: 0, scale: 0.96 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="hidden md:flex"
+        >
+          {repoButton}
+        </motion.div>
       </div>
 
       <div className="flex items-center gap-3">
         {actions}
+
         {showContextButton && (
           <Button
             variant="secondary"
@@ -232,6 +267,7 @@ export default function Topbar({
             Right Contextual Intelligence
           </Button>
         )}
+
         {showRunAnalysis && (
           <Button
             variant="accent"
@@ -243,9 +279,7 @@ export default function Topbar({
             RUN ANALYSIS
           </Button>
         )}
-        {showBrand && (
-          repoButton
-        )}
+
         <motion.button
           type="button"
           whileHover={{ scale: 1.05 }}
@@ -255,6 +289,7 @@ export default function Topbar({
         >
           <Bell size={18} />
         </motion.button>
+
         {!showContextButton && (
           <motion.button
             type="button"
@@ -265,6 +300,7 @@ export default function Topbar({
             <Settings size={18} />
           </motion.button>
         )}
+
         <motion.div
           whileHover={{ scale: 1.06 }}
           className="relative flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-primary-container to-secondary-container text-xs font-bold text-on-primary-container shadow-[0_0_20px_rgba(128,131,255,0.35)]"
