@@ -1,12 +1,14 @@
 import os
-from pathlib import Path
 from app.parsers.tree_sitter_parser import parse_python_code
-from app.config import get_settings
 
+IGNORE_DIRECTORIES = {
+    ".git",
+    "node_modules",
+    "__pycache__",
+    "venv"
+}
 
-settings = get_settings()
-IGNORE_DIRECTORIES = settings.ignore_directories
-MAX_TEXT_FILE_BYTES = settings.max_text_file_bytes
+MAX_TEXT_FILE_BYTES = 250_000
 
 SUPPORTED_EXTENSIONS = {
     ".py": "Python",
@@ -40,7 +42,6 @@ SUPPORTED_EXTENSIONS = {
 def scan_repository(repo_path: str):
 
     scanned_files = []
-    repo_root = Path(repo_path).resolve()
 
     for root, dirs, files in os.walk(repo_path):
 
@@ -56,14 +57,11 @@ def scan_repository(repo_path: str):
             if file_extension in SUPPORTED_EXTENSIONS:
 
                 full_path = os.path.join(root, file)
-                relative_path = str(
-                    Path(full_path).resolve().relative_to(repo_root)
-                )
 
                 file_data = {
                     "file_name": file,
                     "language": SUPPORTED_EXTENSIONS[file_extension],
-                    "path": relative_path
+                    "path": full_path
                 }
 
                 try:
@@ -115,7 +113,5 @@ def scan_repository(repo_path: str):
                     }
 
                 scanned_files.append(file_data)
-                if len(scanned_files) >= settings.max_scan_files:
-                    return scanned_files
 
     return scanned_files

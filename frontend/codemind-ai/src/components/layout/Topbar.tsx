@@ -16,16 +16,9 @@ import { usePathname } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { APP_NAME, DEFAULT_REPO } from "@/lib/constants/navigation";
-import type { ScannedFile } from "@/lib/api/client";
+import { scanRepo, type ScannedFile } from "@/lib/api/client";
 import { easePremium } from "@/lib/motion/presets";
 import { cn } from "@/lib/utils/cn";
-import {
-  getActiveRepo,
-  loadStoredRepos,
-  scanRepoWithAutoClone,
-  setActiveRepo as setStoredActiveRepo,
-  type StoredRepo,
-} from "@/lib/utils/repositories";
 
 type TopbarProps = {
   title?: string;
@@ -37,6 +30,36 @@ type TopbarProps = {
   actions?: React.ReactNode;
   onMenuClick?: () => void;
 };
+
+type StoredRepo = {
+  name?: string;
+  url?: string;
+};
+
+const ACTIVE_REPO_KEY = "codemind_active_repo";
+const REPOS_KEY = "codemind_repos";
+
+function loadStoredRepos(): StoredRepo[] {
+  try {
+    const raw = localStorage.getItem(REPOS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (repo: StoredRepo) =>
+            typeof repo.name === "string" && repo.name
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setStoredActiveRepo(repoName: string) {
+  localStorage.setItem(ACTIVE_REPO_KEY, repoName);
+  window.dispatchEvent(
+    new CustomEvent("codemind-active-repo-change", { detail: repoName })
+  );
+}
 
 export default function Topbar({
   title,
@@ -57,13 +80,14 @@ export default function Topbar({
   // ── Sync active repo from localStorage and listen for changes ──
   useEffect(() => {
     const syncActiveRepo = () => {
-      const stored = getActiveRepo();
+      const stored = localStorage.getItem(ACTIVE_REPO_KEY);
       setActiveRepo(stored || DEFAULT_REPO);
       setRepos(loadStoredRepos());
     };
 
     queueMicrotask(syncActiveRepo);
     window.addEventListener("codemind-active-repo-change", syncActiveRepo);
+    // Also sync when storage is changed from another tab/page
     window.addEventListener("storage", syncActiveRepo);
 
     return () => {
@@ -75,30 +99,24 @@ export default function Topbar({
   // ── Fetch files for the active repo when dropdown opens ──
   useEffect(() => {
     if (!repoMenuOpen) return;
-    const currentRepo = getActiveRepo();
+    const currentRepo = localStorage.getItem(ACTIVE_REPO_KEY);
     if (!currentRepo || currentRepo === DEFAULT_REPO) return;
 
-    let cancelled = false;
     (async () => {
       try {
-        const files = await scanRepoWithAutoClone(currentRepo);
-        if (!cancelled) setRepoFiles(files.slice(0, 8));
+        const data = await scanRepo(currentRepo);
+        setRepoFiles((data.files ?? []).slice(0, 8));
       } catch {
-        if (!cancelled) setRepoFiles([]);
+        setRepoFiles([]);
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [repoMenuOpen]);
 
-  // ── Selecting a repo: ONLY updates active repo in localStorage + fires event.
-  //    Does NOT navigate. Pages listen to the event and react in their own way. ──
+  // ── Selecting a repo: ONLY updates active repo, does NOT navigate ──
   const handleRepoSelect = (repoName: string) => {
-    setStoredActiveRepo(repoName);   // writes localStorage + fires CustomEvent
+    setStoredActiveRepo(repoName);
     setActiveRepo(repoName);
-    setRepoFiles([]);                // reset so files reload for the new repo
+    setRepoFiles([]); // reset files so they reload for new repo
     setRepoMenuOpen(false);
   };
 
@@ -170,16 +188,13 @@ export default function Topbar({
               )}
             </div>
 
-            {/* Files section — only shown when a real repo is active */}
             <div className="max-h-64 overflow-y-auto p-2">
               <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
                 Files in {activeRepo}
               </p>
               {repoFiles.length === 0 ? (
                 <p className="px-2 py-2 text-xs text-on-surface-variant">
-                  {getActiveRepo() && getActiveRepo() !== DEFAULT_REPO
-                    ? "Loading files..."
-                    : "Select a repository above to browse files."}
+                  Loading files...
                 </p>
               ) : (
                 repoFiles.map((file) => (
@@ -229,7 +244,7 @@ export default function Topbar({
           </motion.h1>
         )}
 
-        {/* Repo pill shown next to title on all pages */}
+        {/* Repo pill always shown next to title */}
         <motion.div
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}

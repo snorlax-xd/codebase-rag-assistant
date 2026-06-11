@@ -1,23 +1,31 @@
+import os
 import time
-from functools import lru_cache
-from fastapi import HTTPException
 
 from google import genai
 from google.genai import types
-from app.config import get_settings
 
 
-settings = get_settings()
+# ======================================================
+# CONFIG
+# ======================================================
 
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-@lru_cache
-def get_genai_client():
-    if not settings.google_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="GOOGLE_API_KEY is not configured on the backend."
-        )
-    return genai.Client(api_key=settings.google_api_key)
+if not GOOGLE_API_KEY:
+    raise Exception(
+        "GOOGLE_API_KEY environment variable missing"
+    )
+
+# NEW OFFICIAL CLIENT
+client = genai.Client(
+    api_key=GOOGLE_API_KEY
+)
+
+# Stable modern model
+MODEL_NAME = "gemini-2.5-flash"
+
+MAX_CONTEXT_CHARS = 12000
+MAX_RETRIES = 3
 
 
 # ======================================================
@@ -43,7 +51,7 @@ def build_prompt(
 
         if (
             len(combined_context) + len(chunk)
-            > settings.max_context_chars
+            > MAX_CONTEXT_CHARS
         ):
             break
 
@@ -100,20 +108,18 @@ def generate_response(
 
     last_error = None
 
-    client = get_genai_client()
-
-    for attempt in range(settings.generation_max_retries):
+    for attempt in range(MAX_RETRIES):
 
         try:
 
             response = client.models.generate_content(
-                model=settings.generation_model,
+                model=MODEL_NAME,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.2,
                     top_p=0.8,
                     top_k=40,
-                    max_output_tokens=settings.generation_max_output_tokens,
+                    max_output_tokens=1024,
                 )
             )
 
@@ -143,7 +149,7 @@ def generate_response(
             print(str(error))
             print("==================================")
 
-            if attempt < settings.generation_max_retries - 1:
+            if attempt < MAX_RETRIES - 1:
 
                 wait_time = (attempt + 1) * 3
 

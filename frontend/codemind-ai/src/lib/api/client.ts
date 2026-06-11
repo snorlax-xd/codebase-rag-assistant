@@ -54,10 +54,7 @@ export async function scanRepo(repoName: string) {
   const res = await fetch(
     `${BASE_URL}/scan-repo?repo_name=${encodeURIComponent(repoName)}`
   );
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({}));
-    throw new Error(error.detail || "Could not scan repository");
-  }
+  if (!res.ok) throw new Error((await res.json()).detail);
   return res.json() as Promise<{
     repository: string;
     total_files: number;

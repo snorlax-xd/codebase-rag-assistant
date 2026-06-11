@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Network, Search, Sparkles, X } from "lucide-react";
+import { ChevronDown, Network, Search, Sparkles, Terminal, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -14,6 +14,7 @@ import { Card, GlassPanel } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { searchCode } from "@/lib/api/client";
+import { cn } from "@/lib/utils/cn";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -25,9 +26,33 @@ type SearchResult = {
   language: string;
 };
 
+type StoredRepo = { name?: string; url?: string };
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const ACTIVE_REPO_KEY = "codemind_active_repo";
+const REPOS_KEY = "codemind_repos";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function loadStoredRepos(): StoredRepo[] {
+  try {
+    const raw = localStorage.getItem(REPOS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((r: StoredRepo) => typeof r.name === "string" && r.name)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function setActiveRepo(repoName: string) {
+  localStorage.setItem(ACTIVE_REPO_KEY, repoName);
+  window.dispatchEvent(
+    new CustomEvent("codemind-active-repo-change", { detail: repoName })
+  );
+}
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
@@ -38,7 +63,10 @@ export default function SemanticSearchPage() {
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Repo switcher state
   const [activeRepo, setActiveRepoState] = useState<string>("");
+  const [repos, setRepos] = useState<StoredRepo[]>([]);
+  const [repoDropOpen, setRepoDropOpen] = useState(false);
 
   const router = useRouter();
 
@@ -46,11 +74,13 @@ export default function SemanticSearchPage() {
   useEffect(() => {
     queueMicrotask(() => {
       setActiveRepoState(localStorage.getItem(ACTIVE_REPO_KEY) || "");
+      setRepos(loadStoredRepos());
     });
 
     const handleRepoChange = (e: Event) => {
       const newRepo = (e as CustomEvent<string>).detail;
       setActiveRepoState(newRepo);
+      setRepos(loadStoredRepos());
       // Clear results when switching repos
       setResults([]);
       setSearched(false);
@@ -61,6 +91,16 @@ export default function SemanticSearchPage() {
     return () =>
       window.removeEventListener("codemind-active-repo-change", handleRepoChange);
   }, []);
+
+  const switchRepo = (repoName: string) => {
+    setActiveRepo(repoName);
+    setActiveRepoState(repoName);
+    setRepoDropOpen(false);
+    // Clear previous results
+    setResults([]);
+    setSearched(false);
+    setQuery("");
+  };
 
   // ── Search ──
   const runSearch = useCallback(async (q: string) => {

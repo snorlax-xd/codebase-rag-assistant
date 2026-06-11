@@ -1,21 +1,39 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 
 import ArchitectureFlow from "@/components/features/ArchitectureFlow";
 import AppShell from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import { GlassPanel } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import type { ScannedFile } from "@/lib/api/client";
-import {
-  loadStoredRepos,
-  scanRepoWithAutoClone,
-  setActiveRepo,
-  type StoredRepo,
-} from "@/lib/utils/repositories";
+import { scanRepo, type ScannedFile } from "@/lib/api/client";
 
+const ACTIVE_REPO_KEY = "codemind_active_repo";
+const REPOS_KEY = "codemind_repos";
 const ARCH_HISTORY_KEY = "codemind_architecture_history";
+
+type StoredRepo = {
+  name?: string;
+  url?: string;
+};
+
+function readStoredRepos(): StoredRepo[] {
+  try {
+    const raw = localStorage.getItem(REPOS_KEY);
+    const repos = raw ? JSON.parse(raw) : [];
+    return Array.isArray(repos)
+      ? repos.filter(
+          (repo: StoredRepo) =>
+            typeof repo.name === "string" && repo.name
+        )
+      : [];
+  } catch {
+    localStorage.removeItem(REPOS_KEY);
+    return [];
+  }
+}
 
 function topDirectory(path: string, fileName: string): string {
   const normalized = path.replace(/\\/g, "/");
@@ -62,21 +80,14 @@ function getArchitectureStats(files: ScannedFile[]) {
 }
 
 export default function ArchitecturePage() {
+  const router = useRouter();
   const [repoName, setRepoName] = useState<string | null>(null);
   const [knownRepos, setKnownRepos] = useState<StoredRepo[]>([]);
   const [files, setFiles] = useState<ScannedFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Use a ref so the event listener always sees the latest repoName without
-  // being recreated on every render (avoids stale closure bugs)
-  const currentRepoRef = useRef<string | null>(null);
-
   const loadArchitecture = useCallback(async (repo: string | null) => {
-    // Prevent duplicate loads for the same repo
-    if (repo && repo === currentRepoRef.current && files.length > 0) return;
-
-    currentRepoRef.current = repo;
     setRepoName(repo);
 
     if (!repo) {
@@ -84,19 +95,19 @@ export default function ArchitecturePage() {
       return;
     }
 
-    // Update active repo in localStorage so topbar pill stays in sync.
-    // NOTE: we call setActiveRepo BEFORE the async work so other pages can
-    // react immediately. We do NOT call it again inside the async callback
-    // to avoid re-triggering our own event listener.
-    setActiveRepo(repo);
+    // Update active repo so topbar pill and other pages stay in sync
+    localStorage.setItem(ACTIVE_REPO_KEY, repo);
+    window.dispatchEvent(
+      new CustomEvent("codemind-active-repo-change", { detail: repo })
+    );
 
     setLoading(true);
     setError(null);
     setFiles([]);
 
     try {
-      const scannedFiles = await scanRepoWithAutoClone(repo);
-      setFiles(scannedFiles);
+      const data = await scanRepo(repo);
+      setFiles(data.files ?? []);
 
       // Persist to architecture history
       const seenRaw = localStorage.getItem(ARCH_HISTORY_KEY);
@@ -117,56 +128,36 @@ export default function ArchitecturePage() {
     } finally {
       setLoading(false);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const refreshKnownRepos = useCallback(() => {
-    const repos = loadStoredRepos();
-    let seenOrder: string[] = [];
-
-    try {
-      const seenRaw = localStorage.getItem(ARCH_HISTORY_KEY);
-      const seen: string[] = seenRaw ? JSON.parse(seenRaw) : [];
-      seenOrder = Array.isArray(seen) ? seen : [];
-    } catch {
-      localStorage.removeItem(ARCH_HISTORY_KEY);
-    }
-
-    setKnownRepos(
-      [...repos].sort((a, b) => {
-        const aIndex = seenOrder.indexOf(a.name ?? "");
-        const bIndex = seenOrder.indexOf(b.name ?? "");
-        if (aIndex === -1 && bIndex === -1) return 0;
-        if (aIndex === -1) return 1;
-        if (bIndex === -1) return -1;
-        return aIndex - bIndex;
-      })
-    );
   }, []);
 
-  // On mount: check for ?repo= param, otherwise show repo picker
+  // ── On mount: read ?repo= param OR fall back to active repo ──
   useEffect(() => {
     queueMicrotask(() => {
-      refreshKnownRepos();
+      setKnownRepos(readStoredRepos());
+
       const params = new URLSearchParams(window.location.search);
       const urlRepo = params.get("repo");
-      loadArchitecture(urlRepo || null);
-    });
-  }, [loadArchitecture, refreshKnownRepos]);
+      const activeRepo = localStorage.getItem(ACTIVE_REPO_KEY);
 
-  // ── Listen for repo changes from the topbar dropdown ──
+      // Priority: URL param > localStorage active repo > null (show picker)
+      const targetRepo = urlRepo || activeRepo || null;
+      loadArchitecture(targetRepo);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Listen for repo changes from topbar dropdown ──
   useEffect(() => {
     const handleRepoChange = (e: Event) => {
       const newRepo = (e as CustomEvent<string>).detail;
-      // Guard against our own setActiveRepo call inside loadArchitecture
-      // and against redundant events for the same repo
-      if (!newRepo || newRepo === currentRepoRef.current) return;
-
-      window.history.replaceState(
-        null,
-        "",
-        `/architecture?repo=${encodeURIComponent(newRepo)}`
-      );
-      loadArchitecture(newRepo);
+      if (newRepo && newRepo !== repoName) {
+        // Update URL without full navigation
+        window.history.replaceState(
+          null,
+          "",
+          `/architecture?repo=${encodeURIComponent(newRepo)}`
+        );
+        loadArchitecture(newRepo);
+      }
     };
 
     window.addEventListener("codemind-active-repo-change", handleRepoChange);
@@ -176,7 +167,7 @@ export default function ArchitecturePage() {
         handleRepoChange
       );
     };
-  }, [loadArchitecture]);
+  }, [repoName, loadArchitecture]);
 
   const openRepoArchitecture = (repo: string) => {
     window.history.replaceState(
@@ -184,7 +175,6 @@ export default function ArchitecturePage() {
       "",
       `/architecture?repo=${encodeURIComponent(repo)}`
     );
-    refreshKnownRepos();
     loadArchitecture(repo);
   };
 
@@ -343,14 +333,7 @@ export default function ArchitecturePage() {
                 size="sm"
                 className="mt-4 w-full"
                 disabled={!repoName || loading}
-                onClick={() => {
-                  if (repoName) {
-                    // Force reload by resetting the ref so loadArchitecture
-                    // doesn't skip it as "already loaded"
-                    currentRepoRef.current = null;
-                    loadArchitecture(repoName);
-                  }
-                }}
+                onClick={() => repoName && loadArchitecture(repoName)}
               >
                 {loading ? "Scanning..." : "Rescan Repo"}
               </Button>
