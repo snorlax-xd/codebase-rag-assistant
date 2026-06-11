@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { ElementType } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -22,7 +22,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { cloneRepo, indexRepo } from "@/lib/api/client";
+import { cloneRepo, indexRepo, getIndexStatus } from "@/lib/api/client";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type RepoStatus = "synced" | "indexing" | "error" | "cloning";
 
@@ -34,21 +36,32 @@ type Repo = {
   progress?: number;
   error?: string;
   icon: ElementType;
+  // The canonical folder name on the backend (e.g. facebook__react)
+  // This is what Qdrant stores and what searches must use.
+  canonicalName?: string;
 };
 
 type StoredRepo = Omit<Repo, "icon">;
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
 const STORAGE_KEY = "codemind_repos";
 const ACTIVE_REPO_KEY = "codemind_active_repo";
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 function isRepoStatus(value: unknown): value is RepoStatus {
-  return value === "synced" || value === "indexing" || value === "error" || value === "cloning";
+  return (
+    value === "synced" ||
+    value === "indexing" ||
+    value === "error" ||
+    value === "cloning"
+  );
 }
 
 function isStoredRepo(value: unknown): value is StoredRepo {
   if (!value || typeof value !== "object") return false;
   const repo = value as Partial<StoredRepo>;
-
   return (
     typeof repo.name === "string" &&
     repo.name.trim().length > 0 &&
@@ -58,6 +71,10 @@ function isStoredRepo(value: unknown): value is StoredRepo {
   );
 }
 
+/**
+ * Extract short repo name from a GitHub URL.
+ * https://github.com/facebook/react -> react
+ */
 function getRepoNameFromUrl(url: string): string | null {
   const trimmed = url.trim().replace(/\/+$/, "");
   const lastSegment = trimmed.split("/").pop();
@@ -65,34 +82,30 @@ function getRepoNameFromUrl(url: string): string | null {
   return repoName || null;
 }
 
-function setActiveRepo(repoName: string) {
+function setActiveRepo(repoName: string): void {
   try {
     localStorage.setItem(ACTIVE_REPO_KEY, repoName);
-    window.dispatchEvent(new CustomEvent("codemind-active-repo-change", { detail: repoName }));
+    window.dispatchEvent(
+      new CustomEvent("codemind-active-repo-change", { detail: repoName })
+    );
   } catch {}
 }
 
 function loadRepos(): Repo[] {
   if (typeof window === "undefined") return [];
-
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-
-    return parsed.filter(isStoredRepo).map((repo) => ({
-      ...repo,
-      icon: Terminal,
-    }));
+    return parsed.filter(isStoredRepo).map((repo) => ({ ...repo, icon: Terminal }));
   } catch {
     localStorage.removeItem(STORAGE_KEY);
     return [];
   }
 }
 
-function saveRepos(repos: Repo[]) {
+function saveRepos(repos: Repo[]): void {
   try {
     const serializable: StoredRepo[] = repos.map((repo) => ({
       name: repo.name,
@@ -101,8 +114,8 @@ function saveRepos(repos: Repo[]) {
       lastSync: repo.lastSync,
       progress: repo.progress,
       error: repo.error,
+      canonicalName: repo.canonicalName,
     }));
-
     localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
   } catch {}
 }
@@ -114,6 +127,8 @@ function isValidGitUrl(url: string): boolean {
     url.startsWith("git@github.com:")
   );
 }
+
+// ── Main component ────────────────────────────────────────────────────────────
 
 export default function RepositoriesPage() {
   const router = useRouter();
@@ -127,6 +142,87 @@ export default function RepositoriesPage() {
   >("idle");
   const [modalError, setModalError] = useState<string | null>(null);
   const [reIndexing, setReIndexing] = useState<string | null>(null);
+
+  // Polling refs — track active polls so we can cancel them
+  const pollRefs = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+
+  // ── Indexing progress poller ──
+  const startProgressPolling = (repoName: string, canonicalName: string) => {
+    // Clear any existing poll for this repo
+    const existing = pollRefs.current.get(repoName);
+    if (existing) clearInterval(existing);
+
+    const interval = setInterval(async () => {
+      try {
+        // Poll using the canonical name (e.g. facebook__react)
+        const status = await getIndexStatus(canonicalName || repoName);
+
+        if (status.status === "done") {
+          clearInterval(interval);
+          pollRefs.current.delete(repoName);
+          setRepos((prev) => {
+            const updated = prev.map((r) =>
+              r.name === repoName
+                ? {
+                    ...r,
+                    status: "synced" as RepoStatus,
+                    lastSync: new Date().toLocaleString(),
+                    progress: 100,
+                  }
+                : r
+            );
+            saveRepos(updated);
+            return updated;
+          });
+        } else if (status.status === "error") {
+          clearInterval(interval);
+          pollRefs.current.delete(repoName);
+          setRepos((prev) => {
+            const updated = prev.map((r) =>
+              r.name === repoName
+                ? {
+                    ...r,
+                    status: "error" as RepoStatus,
+                    error: status.error ?? "Indexing failed",
+                    lastSync: new Date().toLocaleString(),
+                  }
+                : r
+            );
+            saveRepos(updated);
+            return updated;
+          });
+        } else if (status.status === "indexing" && status.total > 0) {
+          const pct = Math.round((status.indexed / status.total) * 100);
+          setRepos((prev) =>
+            prev.map((r) =>
+              r.name === repoName ? { ...r, progress: pct } : r
+            )
+          );
+        }
+      } catch {
+        // Silent — poller will retry next tick
+      }
+    }, 3000);
+
+    pollRefs.current.set(repoName, interval);
+  };
+
+  // Cleanup all pollers on unmount
+  useEffect(() => {
+    return () => {
+      pollRefs.current.forEach((interval) => clearInterval(interval));
+    };
+  }, []);
+
+  // Resume polling for any repos that were left in indexing state
+  useEffect(() => {
+    repos.forEach((repo) => {
+      if (repo.status === "indexing" && !pollRefs.current.has(repo.name)) {
+        startProgressPolling(repo.name, repo.canonicalName ?? repo.name);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filteredRepos = repos.filter(
     (repo) =>
@@ -156,8 +252,9 @@ export default function RepositoriesPage() {
       return;
     }
 
-    const repoName = getRepoNameFromUrl(url);
-    if (!repoName) {
+    // Short name shown in UI (e.g. "react")
+    const shortName = getRepoNameFromUrl(url);
+    if (!shortName) {
       setUrlError("Could not determine the repository name from this URL.");
       return;
     }
@@ -166,11 +263,16 @@ export default function RepositoriesPage() {
     setModalStep("cloning");
     setModalError(null);
 
+    let canonicalName = shortName;
+
     try {
-      await cloneRepo(url);
+      const cloneResult = await cloneRepo(url);
+      // Backend returns the canonical folder name e.g. "facebook__react"
+      if (cloneResult.repo_name) {
+        canonicalName = cloneResult.repo_name;
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Clone failed";
-
       if (!msg.toLowerCase().includes("already_exists")) {
         setModalStep("error");
         setModalError(`Clone failed: ${msg}`);
@@ -179,132 +281,76 @@ export default function RepositoriesPage() {
     }
 
     setModalStep("indexing");
-    setActiveRepo(repoName);
+    // Set active repo using short name (UI display) but store canonical
+    setActiveRepo(shortName);
 
     const newRepo: Repo = {
-      name: repoName,
+      name: shortName,
+      canonicalName,
       url: url.replace("https://", ""),
       status: "indexing",
       lastSync: "Indexing...",
+      progress: 0,
       icon: Terminal,
     };
 
     setRepos((prev) => {
-      const exists = prev.some((repo) => repo.name === repoName);
+      const exists = prev.some((r) => r.name === shortName);
       const updated = exists
-        ? prev.map((repo) =>
-            repo.name === repoName
-              ? {
-                  ...repo,
-                  status: "indexing" as RepoStatus,
-                  lastSync: "Indexing...",
-                }
-              : repo
+        ? prev.map((r) =>
+            r.name === shortName
+              ? { ...r, status: "indexing" as RepoStatus, lastSync: "Indexing...", progress: 0, canonicalName }
+              : r
           )
         : [...prev, newRepo];
-
       saveRepos(updated);
       return updated;
     });
 
     try {
-      await indexRepo(repoName);
+      // Index using canonical name so backend finds the folder
+      await indexRepo(canonicalName);
+      // Start polling for real progress
+      startProgressPolling(shortName, canonicalName);
       setModalStep("done");
-
-      setRepos((prev) => {
-        const updated = prev.map((repo) =>
-          repo.name === repoName
-            ? {
-                ...repo,
-                status: "synced" as RepoStatus,
-                lastSync: new Date().toLocaleString(),
-              }
-            : repo
-        );
-
-        saveRepos(updated);
-        return updated;
-      });
-
       setTimeout(() => {
         setModalOpen(false);
         setModalStep("idle");
       }, 1500);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Indexing failed";
-      setModalStep("error");
-      setModalError(`Indexing started in background. Check back in a few minutes. (${msg})`);
-
-      setRepos((prev) => {
-        const updated = prev.map((repo) =>
-          repo.name === repoName
-            ? {
-                ...repo,
-                status: "indexing" as RepoStatus,
-                lastSync: "Indexing in background...",
-              }
-            : repo
-        );
-
-        saveRepos(updated);
-        return updated;
-      });
+      // Indexing runs in background — this is expected for large repos
+      setModalStep("done");
+      setModalError(`Indexing started in background. (${msg})`);
+      startProgressPolling(shortName, canonicalName);
+      setTimeout(() => {
+        setModalOpen(false);
+        setModalStep("idle");
+      }, 2000);
     }
   };
 
   const handleReIndex = async (repo: Repo) => {
     if (reIndexing) return;
-
     setActiveRepo(repo.name);
     setReIndexing(repo.name);
 
     setRepos((prev) => {
       const updated = prev.map((item) =>
         item.name === repo.name
-          ? {
-              ...item,
-              status: "indexing" as RepoStatus,
-              lastSync: "Re-indexing...",
-            }
+          ? { ...item, status: "indexing" as RepoStatus, lastSync: "Re-indexing...", progress: 0 }
           : item
       );
-
       saveRepos(updated);
       return updated;
     });
 
     try {
-      await indexRepo(repo.name);
-
-      setRepos((prev) => {
-        const updated = prev.map((item) =>
-          item.name === repo.name
-            ? {
-                ...item,
-                status: "synced" as RepoStatus,
-                lastSync: new Date().toLocaleString(),
-              }
-            : item
-        );
-
-        saveRepos(updated);
-        return updated;
-      });
+      await indexRepo(repo.canonicalName ?? repo.name);
+      startProgressPolling(repo.name, repo.canonicalName ?? repo.name);
     } catch {
-      setRepos((prev) => {
-        const updated = prev.map((item) =>
-          item.name === repo.name
-            ? {
-                ...item,
-                status: "indexing" as RepoStatus,
-                lastSync: "Indexing in background...",
-              }
-            : item
-        );
-
-        saveRepos(updated);
-        return updated;
-      });
+      // Background indexing — start polling anyway
+      startProgressPolling(repo.name, repo.canonicalName ?? repo.name);
     } finally {
       setReIndexing(null);
     }
@@ -327,26 +373,23 @@ export default function RepositoriesPage() {
               Manage your indexed codebases and AI context settings.
             </p>
           </div>
-
           <Button variant="primary" size="lg" onClick={openModal}>
             <Plus size={18} />
             Add Repository
           </Button>
         </div>
 
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-          <div className="relative w-full">
-            <Search
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant"
-              size={18}
-            />
-            <Input
-              placeholder="Search repositories..."
-              className="pl-10"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-          </div>
+        <div className="relative w-full">
+          <Search
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant"
+            size={18}
+          />
+          <Input
+            placeholder="Search repositories..."
+            className="pl-10"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
 
         {repos.length === 0 && (
@@ -365,24 +408,27 @@ export default function RepositoriesPage() {
             >
               <Card
                 onClick={() => openArchitecture(repo)}
-                className={`flex flex-col gap-4 p-6 transition hover:border-primary/40 ${
+                className={`flex cursor-pointer flex-col gap-4 p-6 transition hover:border-primary/40 ${
                   repo.status === "error" ? "border-l-2 border-l-tertiary" : ""
-                } cursor-pointer`}
+                }`}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-4">
                     <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-surface-container-high text-primary">
                       <Terminal size={24} />
                     </div>
-
                     <div>
                       <h3 className="text-base font-semibold text-on-surface">
                         {repo.name}
                       </h3>
                       <p className="text-sm text-on-surface-variant">{repo.url}</p>
+                      {repo.canonicalName && repo.canonicalName !== repo.name && (
+                        <p className="mt-0.5 font-mono text-[10px] text-on-surface-variant">
+                          stored as {repo.canonicalName}
+                        </p>
+                      )}
                     </div>
                   </div>
-
                   <Badge
                     variant={
                       repo.status === "synced"
@@ -406,15 +452,22 @@ export default function RepositoriesPage() {
                 {(repo.status === "indexing" || repo.status === "cloning") && (
                   <div className="space-y-1">
                     <div className="flex items-center justify-between font-mono text-xs text-on-surface-variant">
-                      <span>PROGRESS</span>
-                      <span>{repo.progress ?? 0}%</span>
+                      <span>INDEXING PROGRESS</span>
+                      <span>
+                        {repo.progress != null && repo.progress > 0
+                          ? `${repo.progress}%`
+                          : "Starting..."}
+                      </span>
                     </div>
-                    <Progress value={repo.progress ?? 0} />
+                    <Progress
+                      value={repo.progress ?? 0}
+                      className={repo.progress === 0 ? "animate-pulse" : ""}
+                    />
                   </div>
                 )}
 
                 {repo.status === "error" && repo.error && (
-                  <div className="rounded-lg border border-tertiary-container/30 bg-tertiary-container/10 p-3 font-mono text-sm text-tertiary">
+                  <div className="rounded-lg border border-tertiary-container/30 bg-tertiary-container/10 p-3 font-mono text-xs text-tertiary">
                     {repo.error}
                   </div>
                 )}
@@ -428,15 +481,16 @@ export default function RepositoriesPage() {
                       {repo.lastSync}
                     </p>
                   </div>
-
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={(event) => {
-                      event.stopPropagation();
+                    onClick={(e) => {
+                      e.stopPropagation();
                       handleReIndex(repo);
                     }}
-                    disabled={reIndexing === repo.name || repo.status === "indexing"}
+                    disabled={
+                      reIndexing === repo.name || repo.status === "indexing"
+                    }
                   >
                     {reIndexing === repo.name ? (
                       <Loader2 size={16} className="animate-spin" />
@@ -451,6 +505,7 @@ export default function RepositoriesPage() {
           ))}
         </div>
 
+        {/* Add repo CTA card */}
         <Card
           className="flex cursor-pointer flex-col items-center justify-center border-dashed p-16 text-center transition hover:border-primary/40"
           onClick={openModal}
@@ -458,17 +513,16 @@ export default function RepositoriesPage() {
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-high">
             <CloudUpload className="text-primary" size={26} />
           </div>
-
           <h3 className="text-lg font-bold text-on-surface">
             Connect New Codebase
           </h3>
-
           <p className="mt-2 max-w-md text-sm text-on-surface-variant">
             Increase CodeMind intelligence by indexing more projects. Supports
-            GitHub, GitLab, and local SSH remotes.
+            GitHub and GitLab HTTPS URLs.
           </p>
         </Card>
 
+        {/* FAB */}
         <motion.button
           type="button"
           whileHover={{ scale: 1.08 }}
@@ -481,6 +535,7 @@ export default function RepositoriesPage() {
         </motion.button>
       </div>
 
+      {/* ── Add repo modal ── */}
       <AnimatePresence>
         {modalOpen && (
           <motion.div
@@ -488,8 +543,8 @@ export default function RepositoriesPage() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-            onClick={(event) => {
-              if (event.target === event.currentTarget) closeModal();
+            onClick={(e) => {
+              if (e.target === e.currentTarget) closeModal();
             }}
           >
             <motion.div
@@ -507,7 +562,6 @@ export default function RepositoriesPage() {
                     Enter a GitHub or GitLab HTTPS URL.
                   </p>
                 </div>
-
                 {modalStep !== "cloning" && modalStep !== "indexing" && (
                   <button
                     type="button"
@@ -528,12 +582,12 @@ export default function RepositoriesPage() {
                     <Input
                       placeholder="https://github.com/owner/repo"
                       value={repoUrl}
-                      onChange={(event) => {
-                        setRepoUrl(event.target.value);
+                      onChange={(e) => {
+                        setRepoUrl(e.target.value);
                         setUrlError(null);
                       }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") handleAddRepo();
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleAddRepo();
                       }}
                       autoFocus
                     />
@@ -541,13 +595,11 @@ export default function RepositoriesPage() {
                       <p className="mt-1.5 text-xs text-tertiary">{urlError}</p>
                     )}
                   </div>
-
                   {modalError && (
                     <p className="mb-4 rounded-lg border border-tertiary-container/30 bg-tertiary-container/10 p-3 font-mono text-sm text-tertiary">
                       {modalError}
                     </p>
                   )}
-
                   <div className="flex justify-end gap-3">
                     <Button variant="secondary" onClick={closeModal}>
                       Cancel
@@ -577,11 +629,11 @@ export default function RepositoriesPage() {
                 <div className="flex flex-col items-center gap-4 py-6">
                   <Loader2 size={32} className="animate-spin text-secondary" />
                   <p className="text-sm font-medium text-on-surface">
-                    Indexing started in background...
+                    Indexing started...
                   </p>
                   <p className="text-xs text-on-surface-variant">
-                    This may take 10-20 minutes for large repos. The repo card
-                    will update when done.
+                    Large repos may take 10–20 minutes. Progress will show on
+                    the repository card.
                   </p>
                 </div>
               )}
@@ -592,6 +644,11 @@ export default function RepositoriesPage() {
                   <p className="text-sm font-medium text-on-surface">
                     Repository added successfully!
                   </p>
+                  {modalError && (
+                    <p className="text-center text-xs text-on-surface-variant">
+                      {modalError}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -606,7 +663,6 @@ export default function RepositoriesPage() {
                       {modalError}
                     </p>
                   </div>
-
                   <div className="flex justify-end gap-3">
                     <Button
                       variant="secondary"

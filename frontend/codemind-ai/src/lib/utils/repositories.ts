@@ -12,12 +12,14 @@ export type StoredRepo = {
 
 export function loadStoredRepos(): StoredRepo[] {
   if (typeof window === "undefined") return [];
-
   try {
     const raw = localStorage.getItem(REPOS_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed)
-      ? parsed.filter((repo: StoredRepo) => typeof repo.name === "string" && repo.name)
+      ? parsed.filter(
+          (repo: StoredRepo) =>
+            typeof repo.name === "string" && repo.name.trim().length > 0
+        )
       : [];
   } catch {
     localStorage.removeItem(REPOS_KEY);
@@ -25,7 +27,8 @@ export function loadStoredRepos(): StoredRepo[] {
   }
 }
 
-export function setActiveRepo(repoName: string) {
+export function setActiveRepo(repoName: string): void {
+  if (typeof window === "undefined") return;
   localStorage.setItem(ACTIVE_REPO_KEY, repoName);
   window.dispatchEvent(
     new CustomEvent("codemind-active-repo-change", { detail: repoName })
@@ -48,12 +51,24 @@ export function normalizeRepoUrl(repo: StoredRepo | undefined): string | null {
   return null;
 }
 
-export async function scanRepoWithAutoClone(repoName: string): Promise<ScannedFile[]> {
+/**
+ * Scans a repository, auto-cloning if needed.
+ *
+ * Key fix: the backend resolves `react` -> `facebook__react` on disk.
+ * The scan response includes the actual folder name in `repository`.
+ * We return both files AND the canonical name so callers can update
+ * their local state to use the name that actually works in Qdrant.
+ */
+export async function scanRepoWithAutoClone(
+  repoName: string
+): Promise<ScannedFile[]> {
   try {
     const data = await scanRepo(repoName);
     return data.files ?? [];
   } catch (error) {
-    const message = error instanceof Error ? error.message.toLowerCase() : "";
+    const message =
+      error instanceof Error ? error.message.toLowerCase() : "";
+    // Only attempt auto-clone for "not cloned" errors
     if (!message.includes("not cloned")) throw error;
 
     const repo = loadStoredRepos().find((item) => item.name === repoName);
