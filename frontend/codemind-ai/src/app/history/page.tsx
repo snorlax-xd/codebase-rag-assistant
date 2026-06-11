@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
-import { ChevronRight, Clock, MessageSquare, Trash2, RefreshCw } from "lucide-react";
+import { ChevronRight, Clock, MessageSquare, RefreshCw, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import AppShell from "@/components/layout/AppShell";
@@ -11,6 +11,9 @@ import { Card } from "@/components/ui/card";
 
 const HISTORY_KEY = "codemind_chat_history";
 const SESSION_KEY = "codemind_current_session_id";
+// Must match constant in chat/page.tsx
+const RESTORE_SESSION_FLAG = "codemind_restore_session";
+const HISTORY_UPDATED_EVENT = "codemind-history-updated";
 
 type ChatSession = {
   id: string;
@@ -83,21 +86,34 @@ export default function HistoryPage() {
   const router = useRouter();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
 
-  // Load on mount — NOT just in useState initializer so we can also refresh
   const refresh = useCallback(() => {
     setSessions(loadHistory());
   }, []);
 
+  // Load on mount
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  // ── Listen for storage events from chat page saving sessions ──
+  // ── Listen for same-tab saves from chat page and cross-tab storage events ──
   useEffect(() => {
-    const handleStorage = () => refresh();
+    const handleSameTab = () => refresh();
+
+    // Cross-tab: storage fires when another tab writes localStorage
+    const handleStorage = (e: StorageEvent) => {
+      // Listen on either the history key itself or the ping key
+      if (e.key === HISTORY_KEY || e.key === "codemind_history_ping") {
+        refresh();
+      }
+    };
+
+    window.addEventListener(HISTORY_UPDATED_EVENT, handleSameTab);
     window.addEventListener("storage", handleStorage);
-    // Also listen for same-tab custom events (chat page fires window storage)
-    return () => window.removeEventListener("storage", handleStorage);
+
+    return () => {
+      window.removeEventListener(HISTORY_UPDATED_EVENT, handleSameTab);
+      window.removeEventListener("storage", handleStorage);
+    };
   }, [refresh]);
 
   const groupedSessions = useMemo(() => {
@@ -120,7 +136,11 @@ export default function HistoryPage() {
   };
 
   const openSession = (session: ChatSession) => {
+    // Set the session ID so chat page knows which session to load
     localStorage.setItem(SESSION_KEY, session.id);
+    // Set the restore flag so chat page treats this as an explicit restore,
+    // not a stale leftover from a previous navigation
+    localStorage.setItem(RESTORE_SESSION_FLAG, "true");
     router.push("/chat");
   };
 

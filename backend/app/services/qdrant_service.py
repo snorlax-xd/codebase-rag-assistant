@@ -2,16 +2,28 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, VectorParams
 from qdrant_client.models import PointStruct
 import uuid
-import os
+from fastapi import HTTPException
+from app.config import get_settings
 
+settings = get_settings()
 
 client = QdrantClient(
-    host=os.getenv("QDRANT_HOST", "localhost"),
-    port=int(os.getenv("QDRANT_PORT", 6333))
+    host=settings.qdrant_host,
+    port=settings.qdrant_port
 )
 
-COLLECTION_NAME = "codebase_chunks"
-EMBEDDING_DIM = 3072
+COLLECTION_NAME = settings.qdrant_collection
+EMBEDDING_DIM = settings.embedding_dim
+
+
+def _collection_vector_size(info):
+    vectors = info.config.params.vectors
+    if hasattr(vectors, "size"):
+        return vectors.size
+    if isinstance(vectors, dict) and "" in vectors:
+        return vectors[""].size
+    return None
+
 
 def create_collection():
     collections = client.get_collections().collections
@@ -27,10 +39,23 @@ def create_collection():
         )
         return {"status": "created", "collection": COLLECTION_NAME}
 
+    info = client.get_collection(COLLECTION_NAME)
+    configured_size = _collection_vector_size(info)
+    if configured_size is not None and configured_size != EMBEDDING_DIM:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Qdrant collection '{COLLECTION_NAME}' has vector size "
+                f"{configured_size}, but EMBEDDING_DIM is {EMBEDDING_DIM}."
+            )
+        )
+
     return {"status": "already_exists", "collection": COLLECTION_NAME}
 
 
 def store_embedding(file_data, embedding):
+
+    create_collection()
 
     client.upsert(
         collection_name=COLLECTION_NAME,
@@ -63,6 +88,7 @@ def store_embedding(file_data, embedding):
 
 
 def search_similar_chunks(query_embedding, repo_name=None):
+    create_collection()
     query_filter = None
     if repo_name:
         query_filter = Filter(
@@ -78,7 +104,7 @@ def search_similar_chunks(query_embedding, repo_name=None):
         collection_name=COLLECTION_NAME,
         query=query_embedding,
         query_filter=query_filter,
-        limit=5
+        limit=settings.search_limit
     )
     return search_results.points
 

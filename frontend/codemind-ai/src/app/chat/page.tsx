@@ -1,17 +1,17 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ChevronDown,
   ChevronRight,
-  Paperclip,
-  Send,
-  Sparkles,
-  Plus,
+  FileCode,
   GitBranch,
   Layers,
-  FileCode,
+  Paperclip,
+  Plus,
+  Send,
+  Sparkles,
 } from "lucide-react";
 
 import CodeEditor from "@/components/features/CodeEditor";
@@ -20,7 +20,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import SystemIndicator from "@/components/ui/SystemIndicator";
 import { Card, GlassPanel } from "@/components/ui/card";
-import { askQuestion, scanRepo, type ScannedFile } from "@/lib/api/client";
+import { askQuestion, type ScannedFile } from "@/lib/api/client";
+import { scanRepoWithAutoClone } from "@/lib/utils/repositories";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,9 @@ type Message = {
 const HISTORY_KEY = "codemind_chat_history";
 const SESSION_KEY = "codemind_current_session_id";
 const ACTIVE_REPO_KEY = "codemind_active_repo";
+const HISTORY_UPDATED_EVENT = "codemind-history-updated";
+// Flag set by history page when user explicitly clicks a session to restore
+const RESTORE_SESSION_FLAG = "codemind_restore_session";
 const ASK_TIMEOUT_MS = 45000;
 
 // ── Session helpers ───────────────────────────────────────────────────────────
@@ -72,8 +76,7 @@ function saveSession(sessionId: string, messages: Message[], repoName: string) {
       repo: repoName,
       timestamp: Date.now(),
       messageCount: messages.length,
-      preview:
-        aiMessages.at(-1)?.text.slice(0, 100) || "",
+      preview: aiMessages.at(-1)?.text.slice(0, 100) || "",
       messages,
     };
 
@@ -86,8 +89,10 @@ function saveSession(sessionId: string, messages: Message[], repoName: string) {
       history.unshift(session);
     }
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
-    // Notify other tabs / history page
-    window.dispatchEvent(new Event("storage"));
+    // Notify same-tab listeners (history page)
+    window.dispatchEvent(new CustomEvent(HISTORY_UPDATED_EVENT));
+    // Also trigger cross-tab storage event by writing a timestamp key
+    localStorage.setItem("codemind_history_ping", String(Date.now()));
   } catch {
     // silently fail
   }
@@ -95,6 +100,57 @@ function saveSession(sessionId: string, messages: Message[], repoName: string) {
 
 function generateSessionId(): string {
   return `session_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+// ── AI-powered repo summary via Anthropic API ────────────────────────────────
+
+async function generateRepoSummary(
+  repoName: string,
+  files: ScannedFile[]
+): Promise<{ summary: string; techStack: string[] }> {
+  const languages = Array.from(new Set(files.map((f) => f.language).filter(Boolean)));
+  const fileNames = files.slice(0, 60).map((f) => f.file_name).join(", ");
+  const totalFiles = files.length;
+
+  const prompt = `You are analyzing a software repository named "${repoName}".
+It contains ${totalFiles} files with these languages: ${languages.join(", ")}.
+Sample file names: ${fileNames}.
+
+Respond ONLY with a JSON object (no markdown, no backticks) with exactly two fields:
+{
+  "summary": "2-3 sentence description of what this repository likely is and does, inferred from the file names and tech stack",
+  "techStack": ["array", "of", "specific", "technologies", "frameworks", "and", "tools", "detected"]
+}`;
+
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1000,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+
+    const data = await response.json();
+    const text = data.content
+      ?.filter((b: { type: string }) => b.type === "text")
+      .map((b: { text: string }) => b.text)
+      .join("") ?? "";
+
+    const clean = text.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    return {
+      summary: parsed.summary ?? "",
+      techStack: Array.isArray(parsed.techStack) ? parsed.techStack : languages,
+    };
+  } catch {
+    return {
+      summary: `${repoName} contains ${totalFiles} files across ${languages.join(", ") || "unknown"} languages.`,
+      techStack: languages,
+    };
+  }
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -138,7 +194,6 @@ function AiMessage({ message }: { message: Message }) {
   const [activeTab, setActiveTab] = useState(0);
 
   const hasRealChunks = (message.codeBlocks?.length ?? 0) > 0;
-
   const chunks = hasRealChunks
     ? message.codeBlocks!.map((b) => ({
         file: b.filename,
@@ -298,9 +353,12 @@ export default function ChatPage() {
   const [sessionId, setSessionId] = useState<string>("");
   const [activeRepo, setActiveRepo] = useState<string>("");
 
-  // Sidebar state — real data from /scan-repo
+  // Sidebar state
   const [repoFiles, setRepoFiles] = useState<ScannedFile[]>([]);
   const [repoLoading, setRepoLoading] = useState(false);
+  const [aiSummary, setAiSummary] = useState<string>("");
+  const [aiTechStack, setAiTechStack] = useState<string[]>([]);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<boolean>(false);
@@ -309,9 +367,20 @@ export default function ChatPage() {
   const loadRepoData = useCallback(async (repo: string) => {
     if (!repo) return;
     setRepoLoading(true);
+    setAiSummary("");
+    setAiTechStack([]);
     try {
-      const data = await scanRepo(repo);
-      setRepoFiles(data.files ?? []);
+      const files = await scanRepoWithAutoClone(repo);
+      setRepoFiles(files);
+
+      // Trigger AI summary generation from file metadata
+      if (files.length > 0) {
+        setSummaryLoading(true);
+        const { summary, techStack } = await generateRepoSummary(repo, files);
+        setAiSummary(summary);
+        setAiTechStack(techStack);
+        setSummaryLoading(false);
+      }
     } catch {
       setRepoFiles([]);
     } finally {
@@ -319,7 +388,7 @@ export default function ChatPage() {
     }
   }, []);
 
-  // ── On mount: sync repo, load prefill, restore or start session ──
+  // ── On mount: sync repo, load prefill, restore or start fresh session ──
   useEffect(() => {
     abortRef.current = false;
 
@@ -328,16 +397,20 @@ export default function ChatPage() {
       setActiveRepo(storedRepo);
       if (storedRepo) loadRepoData(storedRepo);
 
-      // Prefill from "Ask AI" on semantic search
+      // Prefill from "Ask AI" on semantic search or file explorer
       const prefill = localStorage.getItem("codemind_prefill_query");
       if (prefill) {
         localStorage.removeItem("codemind_prefill_query");
         setInput(prefill);
       }
 
-      // Try to restore a session if one was clicked from history
+      // Check if history page explicitly set a session to restore
+      const restoreFlag = localStorage.getItem(RESTORE_SESSION_FLAG);
       const activeSessionId = localStorage.getItem(SESSION_KEY);
-      if (activeSessionId) {
+
+      if (restoreFlag === "true" && activeSessionId) {
+        // Clear the flag so next navigation is a fresh session
+        localStorage.removeItem(RESTORE_SESSION_FLAG);
         try {
           const raw = localStorage.getItem(HISTORY_KEY);
           const history: ChatSession[] = raw ? JSON.parse(raw) : [];
@@ -351,14 +424,14 @@ export default function ChatPage() {
               setActiveRepo(session.repo);
               loadRepoData(session.repo);
             }
-            return; // Don't generate a new session — we're restoring
+            return; // Restoring — don't create a new session
           }
         } catch {
           localStorage.removeItem(SESSION_KEY);
         }
       }
 
-      // Fresh session
+      // Fresh session — always generate a new ID on normal navigation
       const newId = generateSessionId();
       localStorage.setItem(SESSION_KEY, newId);
       setSessionId(newId);
@@ -402,6 +475,7 @@ export default function ChatPage() {
     const newId = generateSessionId();
     setSessionId(newId);
     localStorage.setItem(SESSION_KEY, newId);
+    localStorage.removeItem(RESTORE_SESSION_FLAG);
   }, []);
 
   const send = async () => {
@@ -467,32 +541,19 @@ export default function ChatPage() {
     }
   };
 
-  // ── Derive sidebar data from real scan ──
-  const techStack = Array.from(
-    new Set(repoFiles.map((f) => f.language).filter(Boolean))
-  ).slice(0, 8);
-
+  // ── Derive top dirs from real scan ──
   const topDirs = Array.from(
     new Set(
       repoFiles
         .map((f) => {
           const parts = f.path.replace(/\\/g, "/").split("/").filter(Boolean);
           const idx = parts.findIndex((p) => p === "repositories");
-          const rel =
-            idx >= 0 ? parts.slice(idx + 2) : parts.slice(-3);
+          const rel = idx >= 0 ? parts.slice(idx + 2) : parts.slice(-3);
           return rel[0] && rel[0] !== f.file_name ? rel[0] : null;
         })
         .filter(Boolean)
     )
   ).slice(0, 5) as string[];
-
-  const repoSummary = activeRepo
-    ? repoLoading
-      ? "Loading repository info..."
-      : repoFiles.length > 0
-        ? `${repoFiles.length} files across ${topDirs.length} top-level directories. Primary languages: ${techStack.slice(0, 3).join(", ") || "unknown"}.`
-        : "Repository not indexed yet. Add the repo and run indexing from the Repositories tab."
-    : "Select or add a repository to generate a summary.";
 
   return (
     <AppShell title="Code Intelligence Chat" showRepoPills showContextButton fullBleed>
@@ -562,7 +623,7 @@ export default function ChatPage() {
                 />
                 <span className="flex items-center gap-1.5">
                   <span className="h-1.5 w-1.5 rounded-full bg-secondary" />
-                  GEMINI-1.5-FLASH
+                  GEMINI-2.5-FLASH
                 </span>
                 <span>GEMINI-EMBEDDING-001</span>
                 <span>QDRANT RAG</span>
@@ -625,7 +686,7 @@ export default function ChatPage() {
           </div>
         </section>
 
-        {/* ── Right sidebar — real repo data ── */}
+        {/* ── Right sidebar — AI-powered repo context ── */}
         <aside className="hidden w-80 shrink-0 flex-col border-l border-outline-variant/60 bg-surface-container-low/80 backdrop-blur-xl xl:flex">
           <div className="border-b border-outline-variant p-4">
             <p className="font-mono text-xs uppercase tracking-widest text-on-surface-variant">
@@ -640,7 +701,7 @@ export default function ChatPage() {
 
           <div className="flex-1 space-y-4 overflow-y-auto p-4">
 
-            {/* Summary — derived from real scan */}
+            {/* AI Summary */}
             <Card className="p-3">
               <div className="mb-2 flex items-center gap-2">
                 <GitBranch size={13} className="text-secondary" />
@@ -648,9 +709,27 @@ export default function ChatPage() {
                   Repository Summary
                 </p>
               </div>
-              <p className="text-sm leading-relaxed text-on-surface-variant">
-                {repoSummary}
-              </p>
+              {summaryLoading ? (
+                <div className="flex items-center gap-2">
+                  <motion.span
+                    className="h-1.5 w-1.5 rounded-full bg-primary"
+                    animate={{ opacity: [0.3, 1, 0.3] }}
+                    transition={{ duration: 1, repeat: Infinity }}
+                  />
+                  <p className="text-xs text-on-surface-variant">
+                    Analyzing repository...
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm leading-relaxed text-on-surface-variant">
+                  {aiSummary ||
+                    (activeRepo
+                      ? repoLoading
+                        ? "Loading repository data..."
+                        : "Index this repository to generate a summary."
+                      : "Select a repository to see its summary.")}
+                </p>
+              )}
               {repoFiles.length > 0 && (
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <div className="rounded bg-surface-container-high p-2 text-center">
@@ -673,7 +752,7 @@ export default function ChatPage() {
               )}
             </Card>
 
-            {/* Tech stack — from real scan */}
+            {/* AI-detected Tech Stack */}
             <GlassPanel animate={false}>
               <div className="mb-3 flex items-center gap-2">
                 <Layers size={13} className="text-secondary" />
@@ -682,13 +761,15 @@ export default function ChatPage() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                {techStack.length > 0 ? (
-                  techStack.map((lang) => (
+                {summaryLoading ? (
+                  <p className="text-xs text-on-surface-variant">Detecting...</p>
+                ) : aiTechStack.length > 0 ? (
+                  aiTechStack.map((tech) => (
                     <span
-                      key={lang}
+                      key={tech}
                       className="rounded border border-outline-variant bg-surface-container-high px-2 py-1 font-mono text-xs text-primary"
                     >
-                      {lang}
+                      {tech}
                     </span>
                   ))
                 ) : (

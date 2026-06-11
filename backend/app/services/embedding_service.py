@@ -1,44 +1,43 @@
-import os
 import time
 import requests
+from fastapi import HTTPException
+from app.config import get_settings
 
 
-GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
-
-# Correct embedding model
-EMBEDDING_MODEL = "models/gemini-embedding-001"
-
-# Correct API endpoint
-BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+settings = get_settings()
 
 
 def generate_embedding(text: str):
 
-    if not GEMINI_API_KEY:
-        raise Exception(
-            "GOOGLE_API_KEY environment variable not found"
+    if not settings.google_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="GOOGLE_API_KEY is not configured on the backend."
         )
 
     # Clean and limit input size
     text = text.strip()
 
     if not text:
-        raise Exception("Cannot generate embedding for empty text")
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot generate embedding for empty text."
+        )
 
     # Gemini embedding endpoint
     url = (
-        f"{BASE_URL}/"
-        f"{EMBEDDING_MODEL}:embedContent"
-        f"?key={GEMINI_API_KEY}"
+        f"{settings.gemini_base_url}/"
+        f"{settings.embedding_model}:embedContent"
+        f"?key={settings.google_api_key}"
     )
 
     payload = {
-        "model": EMBEDDING_MODEL,
+        "model": settings.embedding_model,
         "content": {
             "parts": [
                 {
                     # Stay well within token limits
-                    "text": text[:8000]
+                    "text": text[:settings.max_embedding_chars]
                 }
             ]
         }
@@ -48,10 +47,10 @@ def generate_embedding(text: str):
         "Content-Type": "application/json"
     }
 
-    # Free-tier rate limiting safety
-    time.sleep(0.7)
+    if settings.embedding_rate_limit_seconds > 0:
+        time.sleep(settings.embedding_rate_limit_seconds)
 
-    for attempt in range(7):
+    for attempt in range(settings.embedding_retry_attempts):
 
         try:
 
@@ -59,7 +58,7 @@ def generate_embedding(text: str):
                 url,
                 json=payload,
                 headers=headers,
-                timeout=60
+                timeout=settings.embedding_timeout_seconds
             )
 
             # SUCCESS
@@ -88,13 +87,13 @@ def generate_embedding(text: str):
                 504
             ]:
 
-                wait_time = (attempt + 1) * 15
+                wait_time = min((attempt + 1) * 5, 30)
 
                 print(
                     f"Gemini API temporary error "
                     f"{response.status_code}. "
                     f"Retrying in {wait_time}s "
-                    f"({attempt + 1}/7)"
+                    f"({attempt + 1}/{settings.embedding_retry_attempts})"
                 )
 
                 print(response.text)
@@ -112,16 +111,16 @@ def generate_embedding(text: str):
 
         except requests.exceptions.RequestException as error:
 
-            wait_time = (attempt + 1) * 10
+            wait_time = min((attempt + 1) * 3, 15)
 
             print(
                 f"Network error: {error}. "
                 f"Retrying in {wait_time}s "
-                f"({attempt + 1}/7)"
+                f"({attempt + 1}/{settings.embedding_retry_attempts})"
             )
 
             time.sleep(wait_time)
 
     raise Exception(
-        "Gemini embedding failed after 7 retries"
+        f"Gemini embedding failed after {settings.embedding_retry_attempts} retries"
     )

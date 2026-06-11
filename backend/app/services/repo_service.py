@@ -2,53 +2,84 @@ from git import Repo
 from git.exc import GitCommandError
 from fastapi import HTTPException
 import os
+import re
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
 
 from app.services.file_service import scan_repository
 from app.services.embedding_service import generate_embedding
 from app.services.qdrant_service import (
+    create_collection,
     store_embedding,
     search_similar_chunks
 )
+from app.config import get_settings
 
-REPO_BASE_PATH = "repositories"
+settings = get_settings()
+REPO_BASE_PATH = settings.repositories_path
 
-executor = ThreadPoolExecutor(max_workers=4)
+executor = ThreadPoolExecutor(max_workers=settings.index_workers)
+
+_GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$")
+
+
+def normalize_repo_url(repo_url: str) -> tuple[str, str]:
+    parsed = urlparse(repo_url.strip())
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com":
+        raise HTTPException(
+            status_code=400,
+            detail="Only HTTPS GitHub repository URLs are supported."
+        )
+
+    repo_path = parsed.path.strip("/")
+    if not _GITHUB_REPO_RE.match(repo_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Repository URL must look like https://github.com/owner/repo."
+        )
+
+    owner, repo_name = repo_path.split("/", 1)
+    repo_name = repo_name.removesuffix(".git")
+    safe_name = f"{owner}__{repo_name}"
+    return f"https://github.com/{owner}/{repo_name}.git", safe_name
+
+
+def resolve_repository_path(repo_name: str) -> Path:
+    candidate = (REPO_BASE_PATH / repo_name).resolve()
+    base = REPO_BASE_PATH.resolve()
+    if candidate == base or base not in candidate.parents:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid repository name."
+        )
+    return candidate
 
 
 def clone_repository(repo_url: str):
 
     os.makedirs(REPO_BASE_PATH, exist_ok=True)
-
-    # Better validation
-    if not repo_url.startswith("https://github.com/"):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid GitHub repository URL"
-        )
-
-    # Handle trailing slash properly
-    repo_name = (
-        repo_url.rstrip("/")
-        .split("/")[-1]
-        .replace(".git", "")
-    )
-
-    local_path = os.path.join(REPO_BASE_PATH, repo_name)
+    normalized_url, repo_name = normalize_repo_url(repo_url)
+    local_path = resolve_repository_path(repo_name)
 
     # If repo already exists
     if os.path.exists(local_path):
         return {
             "status": "already_exists",
-            "path": local_path
+            "repo_name": repo_name,
+            "path": str(local_path)
         }
 
     try:
 
         Repo.clone_from(
-            repo_url,
-            local_path,
-            depth=1
+            normalized_url,
+            str(local_path),
+            depth=1,
+            multi_options=[
+                "--filter=blob:none",
+                f"--config=core.longpaths=true",
+            ]
         )
 
     except GitCommandError as e:
@@ -78,7 +109,8 @@ def clone_repository(repo_url: str):
 
     return {
         "status": "cloned",
-        "path": local_path
+        "repo_name": repo_name,
+        "path": str(local_path)
     }
 
 
@@ -105,6 +137,11 @@ def split_text(text, max_chars=2000):
 
 def index_repository(repo_path: str):
 
+    repo_path = Path(repo_path).resolve()
+    if not repo_path.exists() or not repo_path.is_dir():
+        raise FileNotFoundError(f"Repository not found: {repo_path}")
+
+    create_collection()
     repo_name = os.path.basename(os.path.normpath(repo_path))
     scanned_files = scan_repository(repo_path)
 
@@ -119,6 +156,14 @@ def index_repository(repo_path: str):
         classes = parsed_data.get("classes", [])
 
         chunks = functions + classes
+        if not chunks and file_data.get("content"):
+            chunks = [{
+                "type": "raw",
+                "name": file_data["file_name"],
+                "content": file_data["content"],
+                "start_line": 1,
+                "end_line": file_data["content"].count("\n") + 1
+            }]
 
         for chunk in chunks:
 
@@ -171,6 +216,9 @@ def index_repository(repo_path: str):
 
 
 def search_repository(query, repo_name=None):
+
+    if repo_name:
+        resolve_repository_path(repo_name)
 
     query_embedding = generate_embedding(query)
 
