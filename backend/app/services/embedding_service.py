@@ -1,35 +1,32 @@
-import os
 import time
 import requests
 
+from app.config import get_settings
 
-GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
+settings = get_settings()
 
-# Correct embedding model
 EMBEDDING_MODEL = "models/gemini-embedding-001"
-
-# Correct API endpoint
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 
 def generate_embedding(text: str):
 
-    if not GEMINI_API_KEY:
+    api_key = settings.google_api_key  # consistent with rest of backend
+
+    if not api_key:
         raise Exception(
-            "GOOGLE_API_KEY environment variable not found"
+            "GOOGLE_API_KEY is not configured on the backend."
         )
 
-    # Clean and limit input size
     text = text.strip()
 
     if not text:
         raise Exception("Cannot generate embedding for empty text")
 
-    # Gemini embedding endpoint
     url = (
         f"{BASE_URL}/"
         f"{EMBEDDING_MODEL}:embedContent"
-        f"?key={GEMINI_API_KEY}"
+        f"?key={api_key}"
     )
 
     payload = {
@@ -37,7 +34,6 @@ def generate_embedding(text: str):
         "content": {
             "parts": [
                 {
-                    # Stay well within token limits
                     "text": text[:8000]
                 }
             ]
@@ -48,7 +44,6 @@ def generate_embedding(text: str):
         "Content-Type": "application/json"
     }
 
-    # Free-tier rate limiting safety
     time.sleep(0.7)
 
     for attempt in range(7):
@@ -62,7 +57,6 @@ def generate_embedding(text: str):
                 timeout=60
             )
 
-            # SUCCESS
             if response.status_code == 200:
 
                 data = response.json()
@@ -79,14 +73,7 @@ def generate_embedding(text: str):
 
                 return data["embedding"]["values"]
 
-            # RETRYABLE ERRORS
-            if response.status_code in [
-                429,
-                500,
-                502,
-                503,
-                504
-            ]:
+            if response.status_code in [429, 500, 502, 503, 504]:
 
                 wait_time = (attempt + 1) * 15
 
@@ -96,14 +83,11 @@ def generate_embedding(text: str):
                     f"Retrying in {wait_time}s "
                     f"({attempt + 1}/7)"
                 )
-
                 print(response.text)
 
                 time.sleep(wait_time)
-
                 continue
 
-            # PERMANENT ERRORS
             raise Exception(
                 f"Gemini API Error "
                 f"{response.status_code}: "
